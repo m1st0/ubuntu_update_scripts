@@ -41,13 +41,9 @@ update_firefox_if_needed() {
   cd "$TMPDIR" || return 1
   curl -LO "$latest_url"
   local tarball="${latest_url##*/}"
-
-  if ! whence extract &>/dev/null; then
-    messenger_std "Missing 'extract' function or command"
-    return 1
-  fi
-
-   extract "$tarball" || return 1
+ 
+  # Create a directory and extract the tarball
+  mkdir -p "${tarball%.tar.gz}" && cd "${tarball%.tar.gz}" && tar -xvzf "$TMPDIR/$tarball" || return 1
 
   local timestamp="$(date +%s)"
   mv "$FIREFOX_DIR" "$TMPDIR/firefox-backup-$timestamp"

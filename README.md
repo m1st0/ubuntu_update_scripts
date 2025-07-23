@@ -66,3 +66,4 @@ The script will:
 
 - Detect the current version from the binary
 - Compare it to Mozilla's latest .tar.xz release
+

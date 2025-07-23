@@ -65,12 +65,8 @@ update_firefox_if_needed() {
     curl -LO "$latest_url"
     tarball=$(basename "$latest_url")
 
-    if ! command -v extract &>/dev/null; then
-      messenger_std "Missing 'extract' function or command"
-      return 1
-    fi
-
-    extract "$tarball" || return 1
+    # Create a directory and extract the tarball
+    mkdir -p "${tarball%.tar.gz}" && cd "${tarball%.tar.gz}" && tar -xvzf "$TMPDIR/$tarball" || return 1
 
     # Backup current
     timestamp=$(date +%s)
