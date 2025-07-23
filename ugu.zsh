@@ -38,20 +38,20 @@ update_firefox_if_needed() {
   fi
 
   messenger_std "Updating Firefox: $current_version → $latest_version"
-  # cd "$TMPDIR" || return 1
-  # curl -LO "$latest_url"
-  # local tarball="${latest_url##*/}"
+  cd "$TMPDIR" || return 1
+  curl -LO "$latest_url"
+  local tarball="${latest_url##*/}"
 
-  # if ! whence extract &>/dev/null; then
-  #   messenger_std "Missing 'extract' function or command"
-  #   return 1
-  # fi
+  if ! whence extract &>/dev/null; then
+    messenger_std "Missing 'extract' function or command"
+    return 1
+  fi
 
-  # extract "$tarball" || return 1
+   extract "$tarball" || return 1
 
-  # local timestamp="$(date +%s)"
-  # mv "$FIREFOX_DIR" "$TMPDIR/firefox-backup-$timestamp"
-  # mv "$TMPDIR/firefox" "$FIREFOX_DIR"
+  local timestamp="$(date +%s)"
+  mv "$FIREFOX_DIR" "$TMPDIR/firefox-backup-$timestamp"
+  mv "$TMPDIR/firefox" "$FIREFOX_DIR"
 
   messenger_std "Firefox updated to version $latest_version"
 }

@@ -33,6 +33,9 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+source ${SCRIPT_DIR}/bash_color_printf.sh
+
 update_firefox_if_needed() {
   FIREFOX_DIR="$HOME/my_applications/firefox"
   FIREFOX_BIN="$FIREFOX_DIR/firefox"
@@ -41,7 +44,7 @@ update_firefox_if_needed() {
 
   # Get current version
   if [[ ! -x "$FIREFOX_BIN" ]]; then
-    echo "Firefox binary not found at $FIREFOX_BIN"
+    messenger_std "Firefox binary not found at $FIREFOX_BIN"
     return 1
   fi
   current_version="$($FIREFOX_BIN --version | awk '{print $3}')"
@@ -57,33 +60,31 @@ update_firefox_if_needed() {
   }
 
   if version_gt "$latest_version" "$current_version"; then
-    echo "Updating Firefox: $current_version → $latest_version"
-    #cd "$TMPDIR" || return 1
-    #curl -LO "$latest_url"
-    #tarball=$(basename "$latest_url")
+    messenger "Updating Firefox: $current_version → $latest_version"
+    cd "$TMPDIR" || return 1
+    curl -LO "$latest_url"
+    tarball=$(basename "$latest_url")
 
-    #if ! command -v extract &>/dev/null; then
-    #  echo "Missing 'extract' function or command"
-    #  return 1
-    #fi
+    if ! command -v extract &>/dev/null; then
+      messenger_std "Missing 'extract' function or command"
+      return 1
+    fi
 
-    #extract "$tarball" || return 1
+    extract "$tarball" || return 1
 
     # Backup current
-    #timestamp=$(date +%s)
-    #mv "$FIREFOX_DIR" "$TMPDIR/firefox-backup-$timestamp"
-    #mv "$TMPDIR/firefox" "$FIREFOX_DIR"
+    timestamp=$(date +%s)
+    mv "$FIREFOX_DIR" "$TMPDIR/firefox-backup-$timestamp"
+    mv "$TMPDIR/firefox" "$FIREFOX_DIR"
 
-    echo "Firefox updated to version $latest_version"
+    messenger_std "Firefox updated to version $latest_version"
   else
-    echo "Firefox is up to date (version $current_version)."
+    messenger_std "Firefox is up to date (version $current_version)."
   fi
 }
 
 update_firefox_if_needed
 
-SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-source ${SCRIPT_DIR}/bash_color_printf.sh
 
 messenger_std "Updating snaps. . .";
 # Split this out into a function, background process, and capture the output
@@ -156,4 +157,3 @@ messenger_end "Script done.";
 #else
 #  printf "\n\033[0;32mAll packages are up to date.\033[0m\n"
 #fiI
-
