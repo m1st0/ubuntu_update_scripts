@@ -1,82 +1,155 @@
 #! /usr/bin/zsh
 # ugu - Script to update Ubuntu system and reduce wait.
 
-# Copyright (c) 2019-2025 Maulik Mistry mistry01@gmail.com
-# Reference: https://gitlab.freedesktop.org/drm/intel/-/issues/5455
+# Copyright (c) 2019-2026 Maulik Mistry mistry01@gmail.com
 #
 # Author: Maulik Mistry
 # Please share support: https://www.paypal.com/paypalme/m1st0
-
+#                       https://venmo.com/code?user_id=3319592654995456106&created=1753283702
 # License: BSD License 2.0
-# [same license text as original, omitted for brevity]
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" &>/dev/null && pwd)"
 source "$SCRIPT_DIR/zsh_color_print.zsh"
 
-update_firefox_if_needed() {
-  local FIREFOX_DIR="$HOME/my_applications/firefox"
-  local FIREFOX_BIN="$FIREFOX_DIR/firefox"
-  local TMPDIR="/tmp"
-  local DOWNLOAD_PAGE_URL="https://download.mozilla.org/?product=firefox-latest-ssl&os=linux64&lang=en-US"
+APP_ROOT="$HOME/my_applications/$app_name"
+TMPDIR="/tmp"
 
-  if [[ ! -x "$FIREFOX_BIN" ]]; then
-    messenger_std "Firefox binary not found at $FIREFOX_BIN"
+retry_curl() {
+    local url="$1"
+    local attempts=3
+    local count=0
+
+    while [[ $count -lt $attempts ]]; do
+        curl -LO "$url"
+        if [[ $? -eq 0 ]]; then
+            return 0  # Success
+        fi
+        count=$((count + 1))
+        messenger_std "Retrying... ($count/$attempts)"
+        sleep 2  # Wait before retrying
+    done
+
+    messenger_std "Error: Failed to download $url after $attempts attempts."
+    return 1  # Failure after retries
+}
+
+update_app() {
+  local app_name="$1"
+  local app_root="$2" # Accept APP_ROOT as an argument
+  local app_dir="$app_root" # Use the passed APP_ROOT
+  local app_bin
+
+  if [[ -d "$app_dir/$app_name" ]]; then
+    app_bin="$app_dir/$app_name/$app_name"
+  elif [[ -d "$app_dir/bin/$app_name" ]]; then
+    app_bin="$app_dir/bin/$app_name"
+    messenger_std "The binary exists at $app_bin"
+  else
     return 1
   fi
 
-  local current_version="$($FIREFOX_BIN --version | awk '{print $3}')"
-  local html="$(curl -s "$DOWNLOAD_PAGE_URL")"
-  local latest_url="$(echo "$html" | grep -oE 'https://download-installer\\.cdn\\.mozilla\\.net[^"]+\\.tar\\.xz')"
-  local latest_version="${latest_url##*/}"
-  latest_version="${latest_version#firefox-}"
-  latest_version="${latest_version%.tar.xz}"
+  local download_url="$3"
+  local current_version="$($app_bin --version | awk '{print $NF}')"
+
+  # Follow redirect and get final URL
+  messenger_std "Curling away to check for updates..."
+  local final_url="$(curl -Ls -o /dev/null -w '%{url_effective}' "$download_url")"
+  if [[ $? -ne 0 ]]; then
+      messenger_std "Error: Failed to retrieve the final URL from $download_url."
+      return 1
+  fi
+  local latest_file="${final_url##*/}"
+  local latest_version="$(echo "$latest_file" | grep -oP '[0-9]+(\\.[0-9]+)+')"
 
   autoload -Uz is-at-least
   if is-at-least "$latest_version" "$current_version"; then
-    messenger_std "Firefox is up to date (version $current_version)."
+    messenger_std "$app_name is up to date (version $current_version)."
     return 0
   fi
 
-  messenger_std "Updating Firefox: $current_version → $latest_version"
+  messenger_std "Updating $app_name: $current_version → $latest_version"
   cd "$TMPDIR" || return 1
-  curl -LO "$latest_url"
-  local tarball="${latest_url##*/}"
- 
-  # Create a directory and extract the tarball
-  mkdir -p "${tarball%.tar.gz}" && cd "${tarball%.tar.gz}" && tar -xvzf "$TMPDIR/$tarball" || return 1
+  retry_curl "$final_url"
+  if [[ $? -ne 0 ]]; then
+    return 1  # Handle failure
+  fi
+  local tarball="${final_url##*/}"
+
+  mkdir -p "${tarball%.tar.*}" && cd "${tarball%.tar.*}" || return 1
+  tar -xf "$TMPDIR/$tarball" || return 1
 
   local timestamp="$(date +%s)"
-  mv "$FIREFOX_DIR" "$TMPDIR/firefox-backup-$timestamp"
-  mv "$TMPDIR/firefox" "$FIREFOX_DIR"
 
-  messenger_std "Firefox updated to version $latest_version"
+  mv "$app_dir" "$TMPDIR/${app_name}-backup-$timestamp"
+  mv "$TMPDIR/$app_name" "$app_dir"
+
+  messenger_std "$app_name updated to version $latest_version"
 }
 
-update_firefox_if_needed
+# --- Optional updates (uncomment as needed) ---
+#update_app "firefox" $APP_ROOT \
+# "https://download.mozilla.org/?product=firefox-latest-ssl&os=linux64&lang=en-US"
+
+#update_app "thunderbird" $APP_ROOT \
+# "https://download.mozilla.org/?product=thunderbird-latest-ssl&os=linux64&lang=en-US"
+
+#update_app "zen" $APP_ROOT \
+# "https://github.com/zen-browser/desktop/releases/latest/download/zen.linux-x86_64.tar.xz"
+
+#update_app "nvim-linux-x86_64" \
+# "https://github.com/neovim/neovim/releases/latest/download/nvim-linux-x86_64.tar.gz"
+
+#messenger_std "Finding firmware updates..."
+# No "sudo" needed
+#fwupdmgr get-updates
+# Manual for now
+#fwupdmgr updates
+
+#messenger_std "Updating flatpak. . ."
+#flatpak update
+
+#messenger_std "Updating rust toolchain. . ."
+#rustup update
+# -------------------------------------------------------
 
 messenger_std "Updating snaps. . ."
 sudo snap refresh
+$SCRIPT_DIR/snap_cleanup.py
 messenger_end "Done."
 linefeed
 
 messenger_std "Updating packages. . ."
-sudo apt update
+sudo apt-fast update
 messenger_end "Done."
 linefeed
 
-if [[ $packages != "All packages are up to date." ]]; then
+update_status=$?
+
+if (( $update_status != 0 )); then
+  messenger_std "Failed to update package lists."
+  exit $update_status
+fi
+
+# Grep counts non-matching lines, so 0 if no upgrades.
+upgrade_count=$(apt list --upgradable 2>/dev/null | grep -vc '^Listing')
+
+if (( $upgrade_count > 0 )); then
   messenger_std "Upgrading. . ."
-  sudo apt full-upgrade
-  local no_issue=$?
-  if [[ $no_issue -ne 0 ]]; then
-    exit $no_issue
-  else
-    linefeed
-    messenger_std "Cleaning installed packages. . ."
-    sudo apt clean
-    messenger_end "Done."
-    linefeed
+  sudo apt-fast full-upgrade
+
+  upgrade_exit_code=$?
+  if (( $upgrade_exit_code != 0 )); then
+    messenger_std "Failure to apt full-upgrade command."
+    exit $upgrade_exit_code
   fi
+
+  linefeed
+  messenger_std "Cleaning out installed debs. . ."
+  sudo apt clean
+  messenger_end "Done."
+  linefeed
+else
+  messenger_std "Nothing to upgrade."
 fi
 
 messenger_end "Script done."
