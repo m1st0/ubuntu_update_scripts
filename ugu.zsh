@@ -110,6 +110,10 @@ update_app() {
 
 #messenger_std "Updating rust toolchain. . ."
 #rustup update
+
+#messenger_std "Updating uv. . ."
+#uv self update
+
 # -------------------------------------------------------
 
 messenger_std "Updating snaps. . ."
