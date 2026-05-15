@@ -99,11 +99,11 @@ update_app() {
 #update_app "nvim-linux-x86_64" \
 # "https://github.com/neovim/neovim/releases/latest/download/nvim-linux-x86_64.tar.gz"
 
-#messenger_std "Finding firmware updates..."
+messenger_std "Finding firmware updates..."
 # No "sudo" needed
 #fwupdmgr get-updates
 # Manual for now
-#fwupdmgr updates
+#fwupdmgr update
 
 #messenger_std "Updating flatpak. . ."
 #flatpak update

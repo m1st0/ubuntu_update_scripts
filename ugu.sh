@@ -113,7 +113,7 @@ update_app() {
 # No "sudo" needed
 #fwupdmgr get-updates
 # Manual for now
-#fwupdmgr updates
+#fwupdmgr update
 
 #messenger_std "Updating flatpak. . ."
 #flatpak update
