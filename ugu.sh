@@ -8,12 +8,19 @@
 #                       https://venmo.com/code?user_id=3319592654995456106&created=1753283702
 # License: BSD License 2.0
 
+# Avoid sudo use directly for more separating logic.
+if [[ $EUID -eq 0 ]]; then
+    echo "Error: Run this script as a normal user, NOT as root/sudo."
+    exit 1
+fi
+
 # Using BASH_SOURCE for better path reliability in Bash
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 source "${SCRIPT_DIR}/bash_color_printf.sh"
 
 APP_ROOT="$HOME/my_applications/$app_name"
 TMPDIR="/tmp"
+SUDO_HEARTBEAT_PID=""
 
 # Bash replacement for ZSH's 'is-at-least'
 is_at_least() {
@@ -96,6 +103,27 @@ update_app() {
   messenger_std "$app_name updated to version $latest_version"
 }
 
+check_sudo_run() {
+    echo "Initializing temporary administrative access for system updates..."
+
+    # Prompts for password ONCE right here
+    if ! sudo -v; then
+        echo "Sudo authentication failed. Aborting."
+        exit 1
+    fi
+    
+    # Starts the background keeper loop
+    while true; do sudo -v; sleep 60; done 2>/dev/null &
+    SUDO_HEARTBEAT_PID=$!
+}
+
+end_sudo_run() {
+    if [ -n "${SUDO_HEARTBEAT_PID}" ] && kill -0 "${SUDO_HEARTBEAT_PID}" 2>/dev/null; then
+        kill "${SUDO_HEARTBEAT_PID}" 2>/dev/null
+        wait "${SUDO_HEARTBEAT_PID}" 2>/dev/null
+    fi
+}
+
 # --- Optional updates (uncomment as needed) ---
 #update_app "firefox" "$APP_ROOT" \
 # "https://download.mozilla.org/?product=firefox-latest-ssl&os=linux64&lang=en-US"
@@ -124,6 +152,9 @@ update_app() {
 #messenger_std "Updating uv. . ."
 #uv self update
 # -------------------------------------------------------
+
+# Start a sudo heartbeat for processes that need it
+check_sudo_run
 
 messenger_std "Updating snaps. . ."
 sudo snap refresh
@@ -161,4 +192,6 @@ else
   messenger_std "Nothing to upgrade."
 fi
 
+# Vital to stop sudo heartbeats for certain processes
+end_sudo_run
 messenger_end "Script done."

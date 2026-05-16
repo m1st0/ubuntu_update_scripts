@@ -13,6 +13,7 @@ source "$SCRIPT_DIR/zsh_color_print.zsh"
 
 APP_ROOT="$HOME/my_applications/$app_name"
 TMPDIR="/tmp"
+SUDO_HEARTBEAT_PID=""
 
 retry_curl() {
     local url="$1"
@@ -86,6 +87,39 @@ update_app() {
   messenger_std "$app_name updated to version $latest_version"
 }
 
+check_sudo_run() {
+    if [[ $EUID -ne 0 ]]; then
+        messenger_end "Script must be run with proper privileges."  
+        exit 1
+    fi
+
+    while true; do
+        sudo -v
+        sleep 60
+    done 2>/dev/null &
+
+    SUDO_HEARTBEAT_PID=$!
+    
+    messenger_std "Privileges verified. Zsh heartbeat active (PID: ${SUDO_HEARTBEAT_PID})."
+}
+
+end_sudo_run() {
+    # Check if the heartbeat PID exists and is actively running
+    if [[ -n "${SUDO_HEARTBEAT_PID}" ]] && kill -0 "${SUDO_HEARTBEAT_PID}" 2>/dev/null; then
+        messenger_std "Stopping sudo heartbeat loop (PID: ${SUDO_HEARTBEAT_PID})..."
+        
+        # Terminate the background loop
+        kill "${SUDO_HEARTBEAT_PID}" 2>/dev/null
+        
+        # NOTE FOR ZSH: Zsh will complain if you try to 'wait' on a process 
+        # that it knows was forcefully terminated, so redirect stderr here 
+        # to keep the terminal perfectly pristine
+        wait "${SUDO_HEARTBEAT_PID}" 2>/dev/null
+        
+        messenger_std "Sudo heartbeat stopped cleanly."
+    fi
+}
+
 # --- Optional updates (uncomment as needed) ---
 #update_app "firefox" $APP_ROOT \
 # "https://download.mozilla.org/?product=firefox-latest-ssl&os=linux64&lang=en-US"
@@ -114,8 +148,8 @@ messenger_std "Finding firmware updates..."
 #messenger_std "Updating uv. . ."
 #uv self update
 
+check_sudo_run
 # -------------------------------------------------------
-
 messenger_std "Updating snaps. . ."
 sudo snap refresh
 $SCRIPT_DIR/snap_cleanup.py
@@ -156,4 +190,5 @@ else
   messenger_std "Nothing to upgrade."
 fi
 
+end_sudo_run
 messenger_end "Script done."
