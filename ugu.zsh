@@ -88,19 +88,20 @@ update_app() {
 }
 
 check_sudo_run() {
-    if [[ $EUID -ne 0 ]]; then
-        messenger_end "Script must be run with proper privileges."  
-        exit 1
-    fi
+  # prompt for sudo once; fail if user cancels
+  if ! sudo -v; then
+    messenger_end "Requires sudo privileges."
+    exit 1
+  fi
 
-    while true; do
-        sudo -v
-        sleep 60
-    done 2>/dev/null &
+  # start background keep-alive to refresh the sudo timestamp
+  while true; do
+    sudo -v
+    sleep 60
+  done 2>/dev/null &
 
-    SUDO_HEARTBEAT_PID=$!
-    
-    messenger_std "Privileges verified. Zsh heartbeat active (PID: ${SUDO_HEARTBEAT_PID})."
+  SUDO_HEARTBEAT_PID=$!
+  messenger_std "Privileges verified. Zsh heartbeat active (PID: ${SUDO_HEARTBEAT_PID})."
 }
 
 end_sudo_run() {
@@ -116,7 +117,7 @@ end_sudo_run() {
         # to keep the terminal perfectly pristine
         wait "${SUDO_HEARTBEAT_PID}" 2>/dev/null
         
-        messenger_std "Sudo heartbeat stopped cleanly."
+        messenger_end "Heartbeat stopped cleanly."
     fi
 }
 
@@ -191,4 +192,5 @@ else
 fi
 
 end_sudo_run
+linefeed
 messenger_end "Script done."
