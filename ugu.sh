@@ -8,15 +8,15 @@
 #                       https://venmo.com/code?user_id=3319592654995456106&created=1753283702
 # License: BSD License 2.0
 
+# Using BASH_SOURCE for better path reliability in Bash
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+source "${SCRIPT_DIR}/bash_color_printf.sh"
+
 # Avoid sudo use directly for more separating logic.
 if [[ $EUID -eq 0 ]]; then
     echo "Error: Run this script as a normal user, NOT as root/sudo."
     exit 1
 fi
-
-# Using BASH_SOURCE for better path reliability in Bash
-SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-source "${SCRIPT_DIR}/bash_color_printf.sh"
 
 APP_ROOT="$HOME/my_applications/$app_name"
 TMPDIR="/tmp"
@@ -124,7 +124,11 @@ end_sudo_run() {
     fi
 }
 
-# --- Optional updates (uncomment as needed) ---
+# -------------------------------------------------------
+# Optional updates (uncomment as needed)
+
+#messenger_std "Starting optional updates..."
+
 #update_app "firefox" "$APP_ROOT" \
 # "https://download.mozilla.org/?product=firefox-latest-ssl&os=linux64&lang=en-US"
 
@@ -151,6 +155,12 @@ end_sudo_run() {
 
 #messenger_std "Updating uv. . ."
 #uv self update
+
+#messenger_std "Updating AstroNvim template configuration..."
+#git -C $HOME/.config/nvim pull
+
+#messenger_end "Done with tooling updates."
+
 # -------------------------------------------------------
 
 # Start a sudo heartbeat for processes that need it
