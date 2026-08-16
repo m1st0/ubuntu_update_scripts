@@ -1,12 +1,13 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2017-2026 Maulik Mistry
+# SPDX-License-Identifier: Apache 2.0
+#
 # ugu - Script to update Ubuntu system and reduce wait.
-
-# Copyright (c) 2019-2026 Maulik Mistry mistry01@gmail.com
 #
 # Author: Maulik Mistry
 # Please share support: https://www.paypal.com/paypalme/m1st0
 #                       https://venmo.com/code?user_id=3319592654995456106&created=1753283702
-# License: BSD License 2.0
+
 
 # Using BASH_SOURCE for better path reliability in Bash
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
@@ -18,7 +19,7 @@ if [[ $EUID -eq 0 ]]; then
     exit 1
 fi
 
-APP_ROOT="$HOME/my_applications/$app_name"
+APP_ROOT="$HOME/my_applications"
 TMPDIR="/tmp"
 SUDO_HEARTBEAT_PID=""
 
@@ -48,7 +49,7 @@ retry_curl() {
     return 1
 }
 
-update_app() {
+update_app() (
   local app_name="$1"
   local app_root="$2"
   local app_dir="$app_root"
@@ -101,7 +102,7 @@ update_app() {
   mv "$TMPDIR/$app_name" "$app_dir"
 
   messenger_std "$app_name updated to version $latest_version"
-}
+)
 
 check_sudo_run() {
     echo "Initializing temporary administrative access for system updates..."
@@ -113,8 +114,15 @@ check_sudo_run() {
     fi
     
     # Starts the background keeper loop
-    while true; do sudo -v; sleep 60; done 2>/dev/null &
+    while true; do 
+      sudo -v; 
+      sleep 60; 
+    done 2>/dev/null &
+    
+
     SUDO_HEARTBEAT_PID=$!
+    messenger_std "Privileges verified. Sudo heartbeat active (PID: ${SUDO_HEARTBEAT_PID})."
+
 }
 
 end_sudo_run() {
@@ -127,19 +135,21 @@ end_sudo_run() {
 # -------------------------------------------------------
 # Optional updates (uncomment as needed)
 
-#messenger_std "Starting optional updates..."
+messenger_std "Starting optional updates..."
 
-#update_app "firefox" "$APP_ROOT" \
-# "https://download.mozilla.org/?product=firefox-latest-ssl&os=linux64&lang=en-US"
+update_app "firefox" "$APP_ROOT" \
+ "https://download.mozilla.org/?product=firefox-latest-ssl&os=linux64&lang=en-US" &
 
-#update_app "thunderbird" "$APP_ROOT" \
-# "https://download.mozilla.org/?product=thunderbird-latest-ssl&os=linux64&lang=en-US"
+update_app "thunderbird" "$APP_ROOT" \
+ "https://download.mozilla.org/?product=thunderbird-latest-ssl&os=linux64&lang=en-US" &
 
 #update_app "zen" $APP_ROOT \
-# "https://github.com/zen-browser/desktop/releases/latest/download/zen.linux-x86_64.tar.xz"
+# "https://github.com/zen-browser/desktop/releases/latest/download/zen.linux-x86_64.tar.xz" &
 
-#update_app "nvim-linux-x86_64" "$APP_ROOT" \
-# "https://github.com/neovim/neovim/releases/latest/download/nvim-linux-x86_64.tar.gz"
+update_app "nvim-linux-x86_64" "$APP_ROOT" \
+ "https://github.com/neovim/neovim/releases/latest/download/nvim-linux-x86_64.tar.gz" &
+
+wait # Let asynchronous application updates finalize
 
 #messenger_std "Finding firmware updates..."
 # No "sudo" needed
@@ -195,6 +205,8 @@ if [[ $upgrade_count -gt 0 ]]; then
 
   linefeed
   messenger_std "Cleaning out installed debs. . ."
+  # Prevent apt lock.
+  sleep 1
   sudo apt clean
   messenger_end "Done."
   linefeed

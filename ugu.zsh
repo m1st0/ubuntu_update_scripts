@@ -1,12 +1,12 @@
-#! /usr/bin/zsh
+#!/usr/bin/env zsh
+# SPDX-FileCopyrightText: Copyright (c) 2017-2026 Maulik Mistry
+# SPDX-License-Identifier: Apache 2.0
+#
 # ugu - Script to update Ubuntu system and reduce wait.
-
-# Copyright (c) 2019-2026 Maulik Mistry mistry01@gmail.com
 #
 # Author: Maulik Mistry
 # Please share support: https://www.paypal.com/paypalme/m1st0
 #                       https://venmo.com/code?user_id=3319592654995456106&created=1753283702
-# License: BSD License 2.0
 
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" &>/dev/null && pwd)"
@@ -18,7 +18,7 @@ if (( EUID == 0 )); then
     exit 1
 fi
 
-APP_ROOT="$HOME/my_applications/$app_name"
+APP_ROOT="$HOME/my_applications"
 TMPDIR="/tmp"
 SUDO_HEARTBEAT_PID=""
 
@@ -41,49 +41,62 @@ retry_curl() {
     return 1  # Failure after retries
 }
 
-update_app() {
+update_app() (
   local app_name="$1"
-  local app_root="$2" # Accept APP_ROOT as an argument
-  local app_dir="$app_root" # Use the passed APP_ROOT
+  local app_root="$2"
+  local app_dir="$app_root"
   local app_bin
 
   if [[ -d "$app_dir/$app_name" ]]; then
     app_bin="$app_dir/$app_name/$app_name"
+    messenger_std "The binary exists at $app_bin"
   elif [[ -d "$app_dir/bin/$app_name" ]]; then
     app_bin="$app_dir/bin/$app_name"
-    messenger_std "The binary exists at $app_bin"
+    messenger_std "The binary exists at $app_dir/bin/$app_name"
   else
+    messenger_std "Cannot find the binary, returning"
+    linefeed
     return 1
   fi
 
   local download_url="$3"
   local current_version="$($app_bin --version | awk '{print $NF}')"
 
-  # Follow redirect and get final URL
-  messenger_std "Curling away to check for updates..."
-  local final_url="$(curl -Ls -o /dev/null -w '%{url_effective}' "$download_url")"
+  messenger_std "Curling away to check for $app_name updates..."
+  local final_url
+  final_url="$(curl -Ls -o /dev/null -w '%{url_effective}' "$download_url")"
+
   if [[ $? -ne 0 ]]; then
-      messenger_std "Error: Failed to retrieve the final URL from $download_url."
-      return 1
+    messenger_std "Error: Failed to retrieve the final URL from $download_url."
+    return 1
   fi
+
   local latest_file="${final_url##*/}"
-  local latest_version="$(echo "$latest_file" | grep -oP '[0-9]+(\\.[0-9]+)+')"
+  local latest_version
+  latest_version="$(echo "$latest_file" | grep -oP '[0-9]+(\\.[0-9]+)+')"
 
   autoload -Uz is-at-least
+
   if is-at-least "$latest_version" "$current_version"; then
     messenger_std "$app_name is up to date (version $current_version)."
+    linefeed
     return 0
   fi
 
   messenger_std "Updating $app_name: $current_version → $latest_version"
+
   cd "$TMPDIR" || return 1
+
   retry_curl "$final_url"
   if [[ $? -ne 0 ]]; then
-    return 1  # Handle failure
+    return 1
   fi
+
   local tarball="${final_url##*/}"
 
-  mkdir -p "${tarball%.tar.*}" && cd "${tarball%.tar.*}" || return 1
+  mkdir -p "${tarball%.tar.*}" &&
+    cd "${tarball%.tar.*}" || return 1
+
   tar -xf "$TMPDIR/$tarball" || return 1
 
   local timestamp="$(date +%s)"
@@ -92,7 +105,8 @@ update_app() {
   mv "$TMPDIR/$app_name" "$app_dir"
 
   messenger_std "$app_name updated to version $latest_version"
-}
+  linefeed
+)
 
 check_sudo_run() {
   # prompt for sudo once; fail if user cancels
@@ -108,7 +122,7 @@ check_sudo_run() {
   done 2>/dev/null &
 
   SUDO_HEARTBEAT_PID=$!
-  messenger_std "Privileges verified. Zsh heartbeat active (PID: ${SUDO_HEARTBEAT_PID})."
+  messenger_std "Privileges verified. Sudo heartbeat active (PID: ${SUDO_HEARTBEAT_PID})."
 }
 
 end_sudo_run() {
@@ -125,45 +139,54 @@ end_sudo_run() {
         wait "${SUDO_HEARTBEAT_PID}" 2>/dev/null
         
         messenger_end "Heartbeat stopped cleanly."
+        linefeed
     fi
 }
 
 # -------------------------------------------------------
 # Optional updates (uncomment as needed)
 
-#messenger_std "Starting optional updates..."
+messenger_std "Starting optional updates..."
+linefeed
 
-#update_app "firefox" $APP_ROOT \
-# "https://download.mozilla.org/?product=firefox-latest-ssl&os=linux64&lang=en-US"
+update_app "firefox" $APP_ROOT \
+ "https://download.mozilla.org/?product=firefox-latest-ssl&os=linux64&lang=en-US" &
 
 #update_app "thunderbird" $APP_ROOT \
-# "https://download.mozilla.org/?product=thunderbird-latest-ssl&os=linux64&lang=en-US"
+# "https://download.mozilla.org/?product=thunderbird-latest&os=linux64&lang=en-US" &
 
-#update_app "zen" $APP_ROOT \
-# "https://github.com/zen-browser/desktop/releases/latest/download/zen.linux-x86_64.tar.xz"
+update_app "zen" $APP_ROOT \
+ "https://github.com/zen-browser/desktop/releases/latest/download/zen.linux-x86_64.tar.xz" &
 
-#update_app "nvim-linux-x86_64" \
-# "https://github.com/neovim/neovim/releases/latest/download/nvim-linux-x86_64.tar.gz"
+update_app "nvim-linux-x86_64" \
+ "https://github.com/neovim/neovim/releases/latest/download/nvim-linux-x86_64.tar.gz" &
+
+wait # Let asynchronous app updates finalize
 
 #messenger_std "Finding firmware updates..."
 # No "sudo" needed
 #fwupdmgr get-updates
 # Manual for now
 #fwupdmgr update
+#linefeed
 
 #messenger_std "Updating flatpak. . ."
 #flatpak update
 
-#messenger_std "Updating rust toolchain. . ."
-#rustup update
+messenger_std "Updating rust toolchain. . ."
+rustup update
+linefeed
 
-#messenger_std "Updating uv. . ."
-#uv self update
+messenger_std "Updating uv. . ."
+uv self update
+linefeed
 
-#messenger_std "Updating AstroNvim template configuration..."
-#git -C $HOME/.config/nvim pull
+messenger_std "Updating AstroNvim template configuration..."
+git -C $HOME/.config/nvim pull
+linefeed
 
-#messenger_end "Done with optional updates."
+messenger_end "Done with optional updates."
+linefeed
 
 # -------------------------------------------------------
 
@@ -203,6 +226,8 @@ if (( $upgrade_count > 0 )); then
 
   linefeed
   messenger_std "Cleaning out installed debs. . ."
+  # Prevent apt lock.
+  sleep 1
   sudo apt clean
   messenger_end "Done."
   linefeed
@@ -211,5 +236,5 @@ else
 fi
 
 end_sudo_run
-linefeed
+
 messenger_end "Script done."

@@ -1,10 +1,14 @@
+<!--
+SPDX-FileCopyrightText: Copyright (c) 2017–2026 Maulik Mistry
+SPDX-License-Identifier: Apache-2.0
+-->
 # UGU – Ubuntu Grab Updates (BASH or ZSH)
 
 This project provides a BASH or ZSH script to update an Ubuntu system with support for various features, including manual updates for Firefox, and system maintenance.
 
-© 2026 Maulik Mistry
+Copyright © 2017–2026 Maulik Mistry
 
-This project is licensed under the BSD 2-Clause License. See the [LICENSE.txt](LICENSE.txt) file for details.
+This project is licensed under Apache License 2.0. See the [LICENSE.txt](LICENSE.txt) file for details.
 If you find this project useful and would like to support its development, consider donating: 
 - [PayPal](https://www.paypal.com/paypalme/m1st0)
 - [Venmo](https://venmo.com/code?user_id=3319592654995456106&created=1753280522)
@@ -33,18 +37,20 @@ A demonstration of system updates, package management, and scripting in BASH and
 
 ## Setup and Usage
 
-1. Clone this repo and make the script executable:
+1. Clone this repo and make scripts executable:
 
 ```
 git clone https://github.com/m1st0/ugu.git ugu
 cd ugu
 ```
 
-2. Make the desired script executable:
+2. Make the desired scripts executable:
 
 ```
 chmod +x ugu.zsh
 chmod +x ugu.sh
+chmod +x bash_color_printf.sh
+chmod +x zsh_color_print.zsh
 ```
 
 3. Run the script of your chosen shell:
