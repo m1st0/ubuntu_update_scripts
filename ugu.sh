@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-FileCopyrightText: Copyright (c) 2017-2026 Maulik Mistry
-# SPDX-License-Identifier: Apache 2.0
+# SPDX-License-Identifier: Apache-2.0
 #
 # ugu - Script to update Ubuntu system and reduce wait.
 #
@@ -10,8 +10,9 @@
 
 
 # Using BASH_SOURCE for better path reliability in Bash
-SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-source "${SCRIPT_DIR}/bash_color_printf.sh"
+SCRIPT_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(dirname -- "$SCRIPT_PATH")"
+source "${SCRIPT_DIR}/vendor/tput_shell_colorize/tput_shell_colorize.sh"
 
 # Avoid sudo use directly for more separating logic.
 if [[ $EUID -eq 0 ]]; then
@@ -136,15 +137,16 @@ end_sudo_run() {
 # Optional updates (uncomment as needed)
 
 messenger_std "Starting optional updates..."
+linefeed
 
 update_app "firefox" "$APP_ROOT" \
  "https://download.mozilla.org/?product=firefox-latest-ssl&os=linux64&lang=en-US" &
 
-update_app "thunderbird" "$APP_ROOT" \
- "https://download.mozilla.org/?product=thunderbird-latest-ssl&os=linux64&lang=en-US" &
+#update_app "thunderbird" "$APP_ROOT" \
+# "https://download.mozilla.org/?product=thunderbird-latest-ssl&os=linux64&lang=en-US" &
 
-#update_app "zen" $APP_ROOT \
-# "https://github.com/zen-browser/desktop/releases/latest/download/zen.linux-x86_64.tar.xz" &
+update_app "zen" $APP_ROOT \
+ "https://github.com/zen-browser/desktop/releases/latest/download/zen.linux-x86_64.tar.xz" &
 
 update_app "nvim-linux-x86_64" "$APP_ROOT" \
  "https://github.com/neovim/neovim/releases/latest/download/nvim-linux-x86_64.tar.gz" &
@@ -160,16 +162,20 @@ wait # Let asynchronous application updates finalize
 #messenger_std "Updating flatpak. . ."
 #flatpak update
 
-#messenger_std "Updating rust toolchain. . ."
-#rustup update
+messenger_std "Updating rust toolchain. . ."
+rustup update
+linefeed
 
-#messenger_std "Updating uv. . ."
-#uv self update
+messenger_std "Updating uv. . ."
+uv self update
+linefeed
 
-#messenger_std "Updating AstroNvim template configuration..."
-#git -C $HOME/.config/nvim pull
+messenger_std "Updating AstroNvim template configuration..."
+git -C $HOME/.config/nvim pull
+linefeed
 
-#messenger_end "Done with tooling updates."
+messenger_end "Done with tooling updates."
+linefeed
 
 # -------------------------------------------------------
 
@@ -179,11 +185,16 @@ check_sudo_run
 messenger_std "Updating snaps. . ."
 sudo snap refresh
 python3 "$SCRIPT_DIR/snap_cleanup.py"
+linefeed
 messenger_end "Done."
 linefeed
 
 messenger_std "Updating packages. . ."
 sudo apt-fast update
+linefeed
+messenger_end "Done."
+linefeed
+
 update_status=$?
 
 if [[ $update_status -ne 0 ]]; then
@@ -214,6 +225,5 @@ else
   messenger_std "Nothing to upgrade."
 fi
 
-# Vital to stop sudo heartbeats for certain processes
 end_sudo_run
 messenger_end "Script done."

@@ -1,0 +1,3 @@
+[submodule "vendor/tput_shell_colorize"]
+	path = vendor/tput_shell_colorize
+	url = https://github.com/m1st0/tput_shell_colorize.git

@@ -1,6 +1,6 @@
 #!/usr/bin/env zsh
 # SPDX-FileCopyrightText: Copyright (c) 2017-2026 Maulik Mistry
-# SPDX-License-Identifier: Apache 2.0
+# SPDX-License-Identifier: Apache-2.0
 #
 # ugu - Script to update Ubuntu system and reduce wait.
 #
@@ -9,8 +9,8 @@
 #                       https://venmo.com/code?user_id=3319592654995456106&created=1753283702
 
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" &>/dev/null && pwd)"
-source "$SCRIPT_DIR/zsh_color_print.zsh"
+SCRIPT_DIR="${0:A:h}"
+source "$SCRIPT_DIR/vendor/tput_shell_colorize/tput_shell_colorize.sh"
 
 # Avoid sudo use directly for more separating logic.
 if (( EUID == 0 )); then
@@ -138,6 +138,7 @@ end_sudo_run() {
         # to keep the terminal perfectly pristine
         wait "${SUDO_HEARTBEAT_PID}" 2>/dev/null
         
+        linefeed
         messenger_end "Heartbeat stopped cleanly."
         linefeed
     fi
@@ -195,12 +196,14 @@ check_sudo_run
 
 messenger_std "Updating snaps. . ."
 sudo snap refresh
-$SCRIPT_DIR/snap_cleanup.py
+python3 $SCRIPT_DIR/snap_cleanup.py
+linefeed
 messenger_end "Done."
 linefeed
 
 messenger_std "Updating packages. . ."
 sudo apt-fast update
+linefeed
 messenger_end "Done."
 linefeed
 
@@ -236,5 +239,4 @@ else
 fi
 
 end_sudo_run
-
 messenger_end "Script done."

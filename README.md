@@ -40,8 +40,14 @@ A demonstration of system updates, package management, and scripting in BASH and
 1. Clone this repo and make scripts executable:
 
 ```
-git clone https://github.com/m1st0/ugu.git ugu
+git clone --recurse-submodules https://github.com/m1st0/ugu.git ugu
 cd ugu
+```
+
+If the project was already cloned without its submodules:
+
+```
+git submodule update --init --recursive
 ```
 
 2. Make the desired scripts executable:
@@ -49,8 +55,6 @@ cd ugu
 ```
 chmod +x ugu.zsh
 chmod +x ugu.sh
-chmod +x bash_color_printf.sh
-chmod +x zsh_color_print.zsh
 ```
 
 3. Run the script of your chosen shell:
