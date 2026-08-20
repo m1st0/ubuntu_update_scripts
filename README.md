@@ -39,30 +39,30 @@ A demonstration of system updates, package management, and scripting in BASH and
 
 1. Clone this repo and make scripts executable:
 
-```
-git clone --recurse-submodules https://github.com/m1st0/ugu.git ugu
-cd ugu
-```
+    ```
+    git clone --recurse-submodules https://github.com/m1st0/ugu.git ugu
+    cd ugu
+    ```
 
-If the project was already cloned without its submodules:
+    If the project was already cloned without its submodules:
 
-```
-git submodule update --init --recursive
-```
+    ```
+    git submodule update --init --recursive
+    ```
 
 2. Make the desired scripts executable:
 
-```
-chmod +x ugu.zsh
-chmod +x ugu.sh
-```
+    ```
+    chmod +x ugu.zsh
+    chmod +x ugu.sh
+    ```
 
 3. Run the script of your chosen shell:
 
-```
-./ugu.sh
-./ugu.zsh
-```
+    ```
+    ./ugu.sh
+    ./ugu.zsh
+    ```
 
 ## Mozilla (and Zen) Update Strategy
 
