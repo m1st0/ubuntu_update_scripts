@@ -184,7 +184,7 @@ check_sudo_run
 
 messenger_std "Updating snaps. . ."
 sudo snap refresh
-python3 "$SCRIPT_DIR/snap_cleanup.py"
+python3 "$SCRIPT_DIR/vendor/snap_cleanup/snap_cleanup.py"
 linefeed
 messenger_end "Done."
 linefeed

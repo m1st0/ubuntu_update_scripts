@@ -9,20 +9,21 @@ This project provides a BASH or ZSH script to update an Ubuntu system with suppo
 Copyright © 2017–2026 Maulik Mistry
 
 This project is licensed under Apache License 2.0. See the [LICENSE.txt](LICENSE.txt) file for details.
+
 If you find this project useful and would like to support its development, consider donating: 
 - [PayPal](https://www.paypal.com/paypalme/m1st0)
 - [Venmo](https://venmo.com/code?user_id=3319592654995456106&created=1753280522)
 
 ## Why this?
 
+A demonstration of system updates, package management, and scripting in BASH and ZSH — valuable for Ubuntu users and developers alike.
+
 Many Ubuntu users face challenges with automatic updates, especially when using Firefox Snap or Deb installations. 
 This script offers a reliable solution for those who prefer manual installations or need to bypass restrictions imposed by certain distributions.
 
-A demonstration of system updates, package management, and scripting in BASH and ZSH — valuable for Ubuntu users and developers alike.
-
 ## Features
 
-- Exampled upgrades via release URLs under "$HOME/my_applications/$app_name"
+- Exampled upgrades via release URLs under `$HOME/my_applications/$app_name`
 - Works well for distros that block applications like Firefox in Snap or Deb, or preferring a manual install
 - Exampled neovim, fwupdmgr, flatpak, rust toolchain upgrades 
 - Snap refresh is run first to prevent delays
