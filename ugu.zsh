@@ -41,6 +41,24 @@ retry_curl() {
     return 1  # Failure after retries
 }
 
+get_github_latest_version() {
+  local repo="$1"
+  local latest_version
+
+  latest_version="$(curl -fsSL \
+    "https://api.github.com/repos/$repo/releases/latest" |
+    jq -r '.tag_name')"
+
+  if [[ -z "$latest_version" || "$latest_version" == "null" ]]; then
+    return 1
+  fi
+
+  # GitHub projects such as Neovim use tags like v0.11.3.
+  latest_version="${latest_version#v}"
+
+  print -r -- "$latest_version"
+}
+
 update_app() (
   local app_name="$1"
   local app_root="$2"
@@ -60,21 +78,32 @@ update_app() (
   fi
 
   local download_url="$3"
+  local github_repo="$4"
   local current_version="$($app_bin --version | awk '{print $NF}')"
-
-  messenger_std "Curling away to check for $app_name updates..."
-  local final_url
-  final_url="$(curl -Ls -o /dev/null -w '%{url_effective}' "$download_url")"
-
-  if [[ $? -ne 0 ]]; then
-    messenger_std "Error: Failed to retrieve the final URL from $download_url."
-    return 1
-  fi
-
-  local latest_file="${final_url##*/}"
   local latest_version
-  latest_version="$(echo "$latest_file" | grep -oP '[0-9]+(\\.[0-9]+)+')"
+  local final_url
 
+  if [[ -n "$github_repo" ]]; then
+    messenger_std "Checking GitHub for $app_name updates..."
+
+    if ! latest_version="$(get_github_latest_version "$github_repo")"; then
+      messenger_std "Error: Failed to retrieve the latest GitHub release for $app_name."
+      return 1
+    fi
+
+    final_url="$download_url"
+  else
+    messenger_std "Curling away to check for $app_name updates..."
+
+    if ! final_url="$(curl -fsSL -o /dev/null -w '%{url_effective}' "$download_url")"; then
+      messenger_std "Error: Failed to retrieve the final URL from $download_url."
+      return 1
+    fi
+
+    local latest_file="${final_url##*/}"
+    latest_version="$(print -r -- "$latest_file" | grep -oP '[0-9]+(\.[0-9]+)+')"
+  fi  
+  
   autoload -Uz is-at-least
 
   if is-at-least "$latest_version" "$current_version"; then
@@ -101,9 +130,16 @@ update_app() (
 
   local timestamp="$(date +%s)"
 
-  mv "$app_dir" "$TMPDIR/${app_name}-backup-$timestamp"
-  mv "$TMPDIR/$app_name" "$app_dir"
+  if ! mv "$app_dir/$app_name" "$TMPDIR/${app_name}-backup-$timestamp"; then
+    messenger_std "Error: Failed to back up $app_name."
+    return 1
+  fi
 
+  if ! mv "$TMPDIR/${tarball%.tar.*}/$app_name" "$app_dir/$app_name"; then
+    messenger_std "Error: Failed to install updated $app_name."
+    return 1
+  fi
+  
   messenger_std "$app_name updated to version $latest_version"
   linefeed
 )
@@ -150,17 +186,19 @@ end_sudo_run() {
 messenger_std "Starting optional updates..."
 linefeed
 
-update_app "firefox" $APP_ROOT \
- "https://download.mozilla.org/?product=firefox-latest-ssl&os=linux64&lang=en-US" &
+update_app "firefox" "$APP_ROOT" \
+  "https://download.mozilla.org/?product=firefox-latest-ssl&os=linux64&lang=en-US" &
 
-#update_app "thunderbird" $APP_ROOT \
-# "https://download.mozilla.org/?product=thunderbird-latest&os=linux64&lang=en-US" &
+update_app "thunderbird" "$APP_ROOT" \
+  "https://download.mozilla.org/?product=thunderbird-latest&os=linux64&lang=en-US" &
 
-update_app "zen" $APP_ROOT \
- "https://github.com/zen-browser/desktop/releases/latest/download/zen.linux-x86_64.tar.xz" &
+update_app "zen" "$APP_ROOT" \
+  "https://github.com/zen-browser/desktop/releases/latest/download/zen.linux-x86_64.tar.xz" \
+  "zen-browser/desktop" &
 
-update_app "nvim-linux-x86_64" \
- "https://github.com/neovim/neovim/releases/latest/download/nvim-linux-x86_64.tar.gz" &
+#update_app "nvim" "$APP_ROOT" \
+#  "https://github.com/neovim/neovim/releases/latest/download/nvim-linux-x86_64.tar.gz" \
+#  "neovim/neovim" &
 
 wait # Let asynchronous app updates finalize
 

@@ -92,17 +92,27 @@ update_app() (
   retry_curl "$final_url" || return 1
   
   local tarball="${final_url##*/}"
-  mkdir -p "${tarball%.tar.*}" && cd "${tarball%.tar.*}" || return 1
+  
+  mkdir -p "${tarball%.tar.*}" && 
+    cd "${tarball%.tar.*}" || return 1
+  
   tar -xf "$TMPDIR/$tarball" || return 1
 
   local timestamp
   timestamp="$(date +%s)"
 
-  # Backup and replace
-  mv "$app_dir" "$TMPDIR/${app_name}-backup-$timestamp"
-  mv "$TMPDIR/$app_name" "$app_dir"
+  if ! mv "$app_dir/$app_name" "$TMPDIR/${app_name}-backup-$timestamp"; then
+    messenger_std "Error: Failed to back up $app_name."
+    return 1
+  fi
 
+  if ! mv "$TMPDIR/${tarball%.tar.*}/$app_name" "$app_dir/$app_name"; then
+    messenger_std "Error: Failed to install updated $app_name."
+    return 1
+  fi
+  
   messenger_std "$app_name updated to version $latest_version"
+  linefeed
 )
 
 check_sudo_run() {
