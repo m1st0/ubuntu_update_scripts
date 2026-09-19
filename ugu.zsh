@@ -1,6 +1,6 @@
 #!/usr/bin/env zsh
-# SPDX-FileCopyrightText: Copyright (c) 2017-2026 Maulik Mistry
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright (c) 2017-2026 Maulik Mistry
 #
 # ugu - Script to update Ubuntu system and reduce wait.
 #
@@ -67,13 +67,12 @@ update_app() (
 
   if [[ -d "$app_dir/$app_name" ]]; then
     app_bin="$app_dir/$app_name/$app_name"
-    messenger_std "The binary exists at $app_bin"
+    messenger_std "Found $app_name at $app_bin."
   elif [[ -d "$app_dir/bin/$app_name" ]]; then
     app_bin="$app_dir/bin/$app_name"
-    messenger_std "The binary exists at $app_dir/bin/$app_name"
+    messenger_std "Found $app_name at $app_dir/bin/$app_name."
   else
-    messenger_std "Cannot find the binary, returning"
-    linefeed
+    messenger_std "Cannot find $app_name."
     return 1
   fi
 
@@ -84,7 +83,7 @@ update_app() (
   local final_url
 
   if [[ -n "$github_repo" ]]; then
-    messenger_std "Checking GitHub for $app_name updates..."
+    messenger_std "Checking GitHub version for $app_name..."
 
     if ! latest_version="$(get_github_latest_version "$github_repo")"; then
       messenger_std "Error: Failed to retrieve the latest GitHub release for $app_name."
@@ -93,22 +92,29 @@ update_app() (
 
     final_url="$download_url"
   else
-    messenger_std "Curling away to check for $app_name updates..."
+    messenger_std "Checking online version for $app_name..."
 
-    if ! final_url="$(curl -fsSL -o /dev/null -w '%{url_effective}' "$download_url")"; then
+    if ! final_url="$(curl -fsSL \
+      --connect-timeout 10 \
+      --max-time 30 \
+      --retry 2 \
+      -o /dev/null \
+      -w '%{url_effective}' \
+      "$download_url")"; then
       messenger_std "Error: Failed to retrieve the final URL from $download_url."
       return 1
     fi
 
     local latest_file="${final_url##*/}"
     latest_version="$(print -r -- "$latest_file" | grep -oP '[0-9]+(\.[0-9]+)+')"
-  fi  
+
+    messenger_std "$app_name: URL check complete (version $latest_version)."
+  fi 
   
   autoload -Uz is-at-least
 
   if is-at-least "$latest_version" "$current_version"; then
     messenger_std "$app_name is up to date (version $current_version)."
-    linefeed
     return 0
   fi
 
@@ -141,7 +147,6 @@ update_app() (
   fi
   
   messenger_std "$app_name updated to version $latest_version"
-  linefeed
 )
 
 check_sudo_run() {
@@ -200,7 +205,7 @@ update_app "zen" "$APP_ROOT" \
 #  "https://github.com/neovim/neovim/releases/latest/download/nvim-linux-x86_64.tar.gz" \
 #  "neovim/neovim" &
 
-wait # Let asynchronous app updates finalize
+wait # Let asynchronous subsheel app updates finalize
 
 #messenger_std "Finding firmware updates..."
 # No "sudo" needed

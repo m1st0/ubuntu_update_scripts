@@ -10,9 +10,10 @@ Copyright © 2017–2026 Maulik Mistry
 
 This project is licensed under Apache License 2.0. See the [LICENSE.txt](LICENSE.txt) file for details.
 
-If you find this project useful and would like to support its development, consider donating: 
+Please share support: 
 - [PayPal](https://www.paypal.com/paypalme/m1st0)
-- [Venmo](https://venmo.com/code?user_id=3319592654995456106&created=1753280522)
+- [Venmo](https://venmo.com/code?user_id=3319592654995456106&created=1753283702)
+)
 
 ## Why this?
 
@@ -36,7 +37,7 @@ This script offers a reliable solution for those who prefer manual installations
 - BASH or ZSH
 - Git
 
-## Setup and Usage
+## Setup and Use
 
 1. Clone this repo and make scripts executable:
 
@@ -58,12 +59,7 @@ This script offers a reliable solution for those who prefer manual installations
     chmod +x ugu.sh
     ```
 
-3. Run the script of your chosen shell:
-
-    ```
-    ./ugu.sh
-    ./ugu.zsh
-    ```
+3. Run the script of your chosen shell.
 
 ## Mozilla (and Zen) Update Strategy
 
