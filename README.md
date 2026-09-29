@@ -2,7 +2,7 @@
 SPDX-FileCopyrightText: Copyright (c) 2017–2026 Maulik Mistry
 SPDX-License-Identifier: Apache-2.0
 -->
-# UGU – Ubuntu Grab Updates (BASH or ZSH)
+# UGU – Ubuntu Grab Updates
 
 This project provides a BASH or ZSH script to update an Ubuntu system with support for various features, including manual updates for Firefox, and system maintenance.
 
@@ -13,7 +13,6 @@ This project is licensed under Apache License 2.0. See the [LICENSE.txt](LICENSE
 Please share support: 
 - [PayPal](https://www.paypal.com/paypalme/m1st0)
 - [Venmo](https://venmo.com/code?user_id=3319592654995456106&created=1753283702)
-)
 
 ## Why this?
 
@@ -30,12 +29,6 @@ This script offers a reliable solution for those who prefer manual installations
 - Snap refresh is run first to prevent delays
 - APT update/upgrade
 - Optional cleanup steps
-- BASH and ZSH scripts
-
-## Requirements
-
-- BASH or ZSH
-- Git
 
 ## Setup and Use
 
@@ -56,16 +49,15 @@ This script offers a reliable solution for those who prefer manual installations
 
     ```
     chmod +x ugu.zsh
-    chmod +x ugu.sh
     ```
 
-3. Run the script of your chosen shell.
+3. Run the script.
 
 ## Mozilla (and Zen) Update Strategy
 
 Unlike Snap or Apt installs, this script checks Mozilla’s (Zen's) release site and updates your manually installed Firefox/Thunderbird/Zen if needed. There used to be issues with the Snap and Apt install changes. I have opted for a manual Mozilla product installation, which allows for custom update checks.
 
-Your Firefox/Thunderbird/Zen must previously and respectively installed into:
+Your custom Firefox/Thunderbird/Zen should previously be installed into unless you want to update the script:
 
 ```
 $HOME/my_applications/firefox/
@@ -75,6 +67,9 @@ $HOME/my_applications/zen/
 
 The script will:
 
-- Detect the current version from the binary
-- Compare it to Mozilla's latest .tar.xz release
+- Detect the current version a binary
+- Compare it to online Mozilla or Github versions per respective binaries
+
+If **AppArmor** complains about your custom use of Mozilla apps, check out my [apparmor_customizations](https://github.com/m1st0/apparmor_customization). 
+
 

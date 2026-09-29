@@ -238,8 +238,12 @@ linefeed
 check_sudo_run
 
 messenger_std "Updating snaps. . ."
-sudo snap refresh
-python3 $SCRIPT_DIR/vendor/snap_cleanup/snap_cleanup.py
+refresh_output=$(sudo snap refresh 2>&1)
+refresh_status=$?
+messenger_end "$refresh_output"
+if (( refresh_status == 0 )) && [[ "$refresh_output" != "All snaps up to date." ]]; then
+    python3 "$SCRIPT_DIR/vendor/snap_cleanup/snap_cleanup.py"
+fi
 linefeed
 messenger_end "Done."
 linefeed
