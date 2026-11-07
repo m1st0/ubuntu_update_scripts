@@ -2,288 +2,289 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright (c) 2017-2026 Maulik Mistry
 #
-# ugu - Script to update Ubuntu system and reduce wait.
-#
 # Author: Maulik Mistry
 # Please share support: https://www.paypal.com/paypalme/m1st0
 #                       https://venmo.com/code?user_id=3319592654995456106&created=1753283702
+#
+# UGU orchestrator: runs the update workers in parallel, each in its own tmux
+# window (its own pty), with a live dashboard in window 0, then reports.
+#
+#   ./ugu.zsh                     menu in a terminal, everything when there is none
+#   ./ugu.zsh -a                  everything, no menu
+#   ./ugu.zsh -o system,tools     only those workers, no menu
+#   ./ugu.zsh -m                  always show the menu
+#   ./ugu.zsh -y                  answer apt prompts automatically
+#
+# Requires gum (https://github.com/charmbracelet/gum#installation).
+#
+# Every worker also runs on its own, for example ./ugu_system.zsh.
 
+
+setopt NO_UNSET PIPE_FAIL
+umask 077
 
 SCRIPT_DIR="${0:A:h}"
-source "$SCRIPT_DIR/vendor/tput_shell_colorize/tput_shell_colorize.sh"
+source "$SCRIPT_DIR/ugu_common.zsh" || exit 1
 
-# Avoid sudo use directly for more separating logic.
+typeset -a o_yes o_help o_only o_menu o_all
+zparseopts -D -E -- y=o_yes -yes=o_yes h=o_help -help=o_help o:=o_only -only:=o_only \
+    m=o_menu -menu=o_menu a=o_all -all=o_all || exit 2
+
+if (( ${#o_help} )); then
+    print -r -- "Usage: ugu.zsh [-a|--all] [-m|--menu] [-y|--yes] [-o|--only worker[,worker...]]"
+    print -r -- "  (no options) menu in a terminal; everything when there is no terminal"
+    print -r -- "  -a, --all   run everything now, no menu"
+    print -r -- "  -m, --menu  always show the menu, even if you chose to stop asking"
+    print -r -- "  -y, --yes   answer apt prompts automatically (UGU_ASSUME_YES=1)"
+    print -r -- "  -o, --only  run only the named workers, e.g. --only system,tools"
+    print -r -- "Workers: firefox thunderbird zen system tools flatpak firmware"
+    exit 0
+fi
+(( ${#o_yes} )) && export UGU_ASSUME_YES=1
+
+typeset -a workers
+workers=( firefox thunderbird zen system tools flatpak firmware )
+(( ${#o_only} )) && workers=( ${(s:,:)${o_only[-1]}} )
+
 if (( EUID == 0 )); then
-    messenger_std "Error: Run this script as a normal user, NOT as root/sudo."
+    messenger_end "Run UGU as a normal user, not as root or through sudo."
     exit 1
 fi
-
-APP_ROOT="$HOME/my_applications"
-TMPDIR="/tmp"
-SUDO_HEARTBEAT_PID=""
-
-retry_curl() {
-    local url="$1"
-    local attempts=3
-    local count=0
-
-    while [[ $count -lt $attempts ]]; do
-        curl -LO "$url"
-        if [[ $? -eq 0 ]]; then
-            return 0  # Success
-        fi
-        count=$((count + 1))
-        messenger_std "Retrying... ($count/$attempts)"
-        sleep 2  # Wait before retrying
-    done
-
-    messenger_std "Error: Failed to download $url after $attempts attempts."
-    return 1  # Failure after retries
+ugu_require_commands tmux gum apt-fast || {
+    messenger_end "Install the missing command(s) above. gum: https://github.com/charmbracelet/gum#installation"
+    exit 1
 }
 
-get_github_latest_version() {
-  local repo="$1"
-  local latest_version
+# ---------------------------------------------------------------------------
+# Menu. It only fills in what the flags would have set (the worker list and
+# UGU_ASSUME_YES); everything after it runs exactly as if you had typed that
+# command line. Quit, Esc and Ctrl-C all exit cleanly without starting anything.
+# ---------------------------------------------------------------------------
+typeset menu_dir="${XDG_CONFIG_HOME:-$HOME/.config}/ugu"
+typeset menu_marker="$menu_dir/skip-menu"
 
-  latest_version="$(curl -fsSL \
-    "https://api.github.com/repos/$repo/releases/latest" |
-    jq -r '.tag_name')"
+ugu_menu() {
+    local -a all_workers=( firefox thunderbird zen system tools flatpak firmware )
+    local -a chosen=()
+    local choice="" picked=""
 
-  if [[ -z "$latest_version" || "$latest_version" == "null" ]]; then
-    return 1
-  fi
+    choice="$(gum choose --header 'UGU: what should run?' \
+        "Everything" \
+        "Everything (and stop asking)" \
+        "System only (snap and apt)" \
+        "Tools only (rust, uv, AstroNvim)" \
+        "Apps only (firefox, thunderbird, zen)" \
+        "Pick workers..." \
+        "Quit")" || return 1
 
-  # GitHub projects such as Neovim use tags like v0.11.3.
-  latest_version="${latest_version#v}"
+    case "$choice" in
+        "Everything (and stop asking)")
+            mkdir -p -- "$menu_dir" && : > "$menu_marker"
+            messenger_std "Saved. UGU will run everything without asking."
+            messenger_std "Bring the menu back with: ugu.zsh --menu   (or delete $menu_marker)"
+            chosen=( "${all_workers[@]}" )
+            ;;
+        Everything)  chosen=( "${all_workers[@]}" ) ;;
+        System*)     chosen=( system ) ;;
+        Tools*)      chosen=( tools ) ;;
+        Apps*)       chosen=( firefox thunderbird zen ) ;;
+        Pick*)
+            picked="$(gum choose --no-limit --header 'Space toggles, Enter confirms' "${all_workers[@]}")" || return 1
+            chosen=( ${(f)picked} )
+            ;;
+        *)           return 1 ;;
+    esac
+    (( ${#chosen} )) || return 1
+    workers=( "${chosen[@]}" )
 
-  print -r -- "$latest_version"
-}
-
-update_app() (
-  local app_name="$1"
-  local app_root="$2"
-  local app_dir="$app_root"
-  local app_bin
-
-  if [[ -d "$app_dir/$app_name" ]]; then
-    app_bin="$app_dir/$app_name/$app_name"
-    messenger_std "Found $app_name at $app_bin."
-  elif [[ -d "$app_dir/bin/$app_name" ]]; then
-    app_bin="$app_dir/bin/$app_name"
-    messenger_std "Found $app_name at $app_dir/bin/$app_name."
-  else
-    messenger_std "Cannot find $app_name."
-    return 1
-  fi
-
-  local download_url="$3"
-  local github_repo="$4"
-  local current_version="$($app_bin --version | awk '{print $NF}')"
-  local latest_version
-  local final_url
-
-  if [[ -n "$github_repo" ]]; then
-    messenger_std "Checking GitHub version for $app_name..."
-
-    if ! latest_version="$(get_github_latest_version "$github_repo")"; then
-      messenger_std "Error: Failed to retrieve the latest GitHub release for $app_name."
-      return 1
+    if (( ${chosen[(Ie)system]} )) && [[ "${UGU_ASSUME_YES:-0}" != 1 ]]; then
+        gum confirm --default=false "Answer apt prompts automatically (-y)?"
+        case $? in
+            0) export UGU_ASSUME_YES=1 ;;
+            1) ;;
+            *) return 1 ;;
+        esac
     fi
-
-    final_url="$download_url"
-  else
-    messenger_std "Checking online version for $app_name..."
-
-    if ! final_url="$(curl -fsSL \
-      --connect-timeout 10 \
-      --max-time 30 \
-      --retry 2 \
-      -o /dev/null \
-      -w '%{url_effective}' \
-      "$download_url")"; then
-      messenger_std "Error: Failed to retrieve the final URL from $download_url."
-      return 1
-    fi
-
-    local latest_file="${final_url##*/}"
-    latest_version="$(print -r -- "$latest_file" | grep -oP '[0-9]+(\.[0-9]+)+')"
-
-    messenger_std "$app_name: URL check complete (version $latest_version)."
-  fi 
-  
-  autoload -Uz is-at-least
-
-  if is-at-least "$latest_version" "$current_version"; then
-    messenger_std "$app_name is up to date (version $current_version)."
     return 0
-  fi
-
-  messenger_std "Updating $app_name: $current_version → $latest_version"
-
-  cd "$TMPDIR" || return 1
-
-  retry_curl "$final_url"
-  if [[ $? -ne 0 ]]; then
-    return 1
-  fi
-
-  local tarball="${final_url##*/}"
-
-  mkdir -p "${tarball%.tar.*}" &&
-    cd "${tarball%.tar.*}" || return 1
-
-  tar -xf "$TMPDIR/$tarball" || return 1
-
-  local timestamp="$(date +%s)"
-
-  if ! mv "$app_dir/$app_name" "$TMPDIR/${app_name}-backup-$timestamp"; then
-    messenger_std "Error: Failed to back up $app_name."
-    return 1
-  fi
-
-  if ! mv "$TMPDIR/${tarball%.tar.*}/$app_name" "$app_dir/$app_name"; then
-    messenger_std "Error: Failed to install updated $app_name."
-    return 1
-  fi
-  
-  messenger_std "$app_name updated to version $latest_version"
-)
-
-check_sudo_run() {
-  # prompt for sudo once; fail if user cancels
-  if ! sudo -v; then
-    messenger_end "Requires sudo privileges."
-    exit 1
-  fi
-
-  # start background keep-alive to refresh the sudo timestamp
-  while true; do
-    sudo -v
-    sleep 60
-  done 2>/dev/null &
-
-  SUDO_HEARTBEAT_PID=$!
-  messenger_std "Privileges verified. Sudo heartbeat active (PID: ${SUDO_HEARTBEAT_PID})."
 }
 
-end_sudo_run() {
-    # Check if the heartbeat PID exists and is actively running
-    if [[ -n "${SUDO_HEARTBEAT_PID}" ]] && kill -0 "${SUDO_HEARTBEAT_PID}" 2>/dev/null; then
-        messenger_std "Stopping sudo heartbeat loop (PID: ${SUDO_HEARTBEAT_PID})..."
-        
-        # Terminate the background loop
-        kill "${SUDO_HEARTBEAT_PID}" 2>/dev/null
-        
-        # NOTE FOR ZSH: Zsh will complain if you try to 'wait' on a process 
-        # that it knows was forcefully terminated, so redirect stderr here 
-        # to keep the terminal perfectly pristine
-        wait "${SUDO_HEARTBEAT_PID}" 2>/dev/null
-        
-        linefeed
-        messenger_end "Heartbeat stopped cleanly."
-        linefeed
+# Show the menu when asked for, or by default in a terminal when nothing was
+# chosen and you have not told it to stop asking. No terminal means everything.
+typeset -i want_menu=0
+if (( ${#o_menu} )); then
+    want_menu=1
+elif (( ${#o_only} == 0 && ${#o_all} == 0 )) \
+    && [[ -t 0 && -t 1 && ! -e "$menu_marker" && "${UGU_ALWAYS_ALL:-0}" != 1 ]]; then
+    want_menu=1
+fi
+
+if (( want_menu )); then
+    if [[ ! -t 0 || ! -t 1 ]]; then
+        messenger_end "--menu needs an interactive terminal."
+        exit 1
     fi
+    ugu_menu || { messenger_std "Nothing started."; exit 0 }
+fi
+
+typeset worker script
+for worker in "${workers[@]}"; do
+    script="$SCRIPT_DIR/ugu_${worker}.zsh"
+    if [[ ! -x "$script" ]]; then
+        messenger_end "Unknown or non-executable worker: $worker ($script)"
+        exit 1
+    fi
+done
+
+typeset -g UGU_SESSION="ugu-${UID}-$$"
+typeset -g UGU_SOCKET="$UGU_SESSION"
+typeset -gx UGU_STATE_DIR="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/ugu-${UID}-$$"
+mkdir -m 700 "$UGU_STATE_DIR" "$UGU_STATE_DIR/results" "$UGU_STATE_DIR/logs" || exit 1
+print -r -- "$EPOCHSECONDS" > "$UGU_STATE_DIR/start"
+
+if [[ ! -t 0 || ! -t 1 ]]; then
+    # Unattended: no one can answer prompts, so never wait for input.
+    # sudo must work without a password; apt prompts are answered with yes.
+    export UGU_HEADLESS=1 UGU_NONINTERACTIVE=1
+    export UGU_ASSUME_YES="${UGU_ASSUME_YES:-1}"
+fi
+
+# A private tmux server: your own tmux config, sessions and key bindings are
+# never touched, and the workers inherit this shell's PATH (cargo, uv, ...).
+tm() { env -u TMUX tmux -u -L "$UGU_SOCKET" -f /dev/null "$@" }
+
+ugu_abort() {
+    tm kill-session -t "$UGU_SESSION" 2>/dev/null
+}
+trap 'ugu_abort; exit 130' INT TERM HUP
+
+ugu_shell_command() {
+    local arg
+    local -a quoted=()
+    for arg in "$@"; do
+        quoted+=( "${(q)arg}" )
+    done
+    REPLY="${(j: :)quoted}"
 }
 
-# -------------------------------------------------------
-# Optional updates (uncomment as needed)
+integer cols lines
+cols="$(tput cols 2>/dev/null)" || cols=120
+lines="$(tput lines 2>/dev/null)" || lines=40
+(( cols >= 40 )) || cols=120
+(( lines >= 12 )) || lines=40
 
-messenger_std "Starting optional updates..."
-linefeed
-
-update_app "firefox" "$APP_ROOT" \
-  "https://download.mozilla.org/?product=firefox-latest-ssl&os=linux64&lang=en-US" &
-
-update_app "thunderbird" "$APP_ROOT" \
-  "https://download.mozilla.org/?product=thunderbird-latest&os=linux64&lang=en-US" &
-
-update_app "zen" "$APP_ROOT" \
-  "https://github.com/zen-browser/desktop/releases/latest/download/zen.linux-x86_64.tar.xz" \
-  "zen-browser/desktop" &
-
-#update_app "nvim" "$APP_ROOT" \
-#  "https://github.com/neovim/neovim/releases/latest/download/nvim-linux-x86_64.tar.gz" \
-#  "neovim/neovim" &
-
-wait # Let asynchronous subsheel app updates finalize
-
-#messenger_std "Finding firmware updates..."
-# No "sudo" needed
-#fwupdmgr get-updates
-# Manual for now
-#fwupdmgr update
-#linefeed
-
-#messenger_std "Updating flatpak. . ."
-#flatpak update
-
-messenger_std "Updating rust toolchain. . ."
-rustup update
-linefeed
-
-messenger_std "Updating uv. . ."
-uv self update
-linefeed
-
-messenger_std "Updating AstroNvim template configuration..."
-git -C $HOME/.config/nvim pull
-linefeed
-
-messenger_end "Done with optional updates."
-linefeed
-
-# -------------------------------------------------------
-
-# Start a sudo heartbeat for processes that need it
-check_sudo_run
-
-messenger_std "Updating snaps. . ."
-refresh_output=$(sudo snap refresh 2>&1)
-refresh_status=$?
-messenger_end "$refresh_output"
-if (( refresh_status == 0 )) && [[ "$refresh_output" != "All snaps up to date." ]]; then
-    python3 "$SCRIPT_DIR/vendor/snap_cleanup/snap_cleanup.py"
-fi
-linefeed
-messenger_end "Done."
-linefeed
-
-messenger_std "Updating packages. . ."
-sudo apt-fast update
-linefeed
-messenger_end "Done."
-linefeed
-
-update_status=$?
-
-if (( $update_status != 0 )); then
-  messenger_std "Failed to update package lists."
-  exit $update_status
+# Window 0: dashboard.
+ugu_shell_command zsh "$SCRIPT_DIR/ugu_dashboard.zsh" "$UGU_STATE_DIR" "$UGU_SESSION" "${workers[@]}"
+if ! tm new-session -d -s "$UGU_SESSION" -n dashboard -x "$cols" -y "$lines" "$REPLY"; then
+    messenger_end "Could not create the tmux session."
+    exit 1
 fi
 
-# Grep counts non-matching lines, so 0 if no upgrades.
-upgrade_count=$(apt list --upgradable 2>/dev/null | grep -vc '^Listing')
+tm set-option -g status-position top
+tm set-option -g status-interval 1
+tm set-option -g mouse on
+tm set-option -g remain-on-exit on
+tm set-option -g automatic-rename off
+tm set-option -g status-style 'bg=colour234,fg=colour250'
+tm set-option -g status-left-length 20
+tm set-option -g status-left '#[bg=colour212,fg=colour16,bold] UGU #[default] '
+tm set-option -g status-right '#[fg=colour244]Ctrl-b 0 dashboard  n/p switch  d detach  mouse: click a tab '
+tm set-option -gw @ugu_icon ''
+tm set-option -gw @ugu_color colour245
+tm set-option -g window-status-separator ''
+tm set-option -g window-status-format ' #[fg=#{@ugu_color}]#{@ugu_icon}#[fg=colour245]#I:#W '
+tm set-option -g window-status-current-format '#[bg=colour212,fg=colour16,bold] #{@ugu_icon}#I:#W #[default]'
 
-if (( $upgrade_count > 0 )); then
-  messenger_std "Upgrading. . ."
-  sudo apt-fast full-upgrade
+for worker in "${workers[@]}"; do
+    script="$SCRIPT_DIR/ugu_${worker}.zsh"
+    ugu_shell_command zsh "$SCRIPT_DIR/ugu_worker_runner.zsh" "$worker" "$script" "$UGU_STATE_DIR"
+    if ! tm new-window -d -t "$UGU_SESSION:" -n "$worker" "$REPLY"; then
+        messenger_end "Could not create a tmux window for $worker."
+        ugu_abort
+        exit 1
+    fi
+    # Keep a full copy of each worker's terminal output for the final report.
+    tm pipe-pane -o -t "$UGU_SESSION:$worker" "cat >> ${(q)UGU_STATE_DIR}/logs/${worker}.log"
+done
+tm select-window -t "$UGU_SESSION:dashboard"
 
-  upgrade_exit_code=$?
-  if (( $upgrade_exit_code != 0 )); then
-    messenger_std "Failure to apt full-upgrade command."
-    exit $upgrade_exit_code
-  fi
+# Release the runners now that every window exists and is being logged.
+: > "$UGU_STATE_DIR/go"
 
-  linefeed
-  messenger_std "Cleaning out installed debs. . ."
-  # Prevent apt lock.
-  sleep 1
-  sudo apt clean
-  messenger_end "Done."
-  linefeed
+if [[ "${UGU_HEADLESS:-0}" == 1 ]]; then
+    messenger_std "No terminal attached; running headless. Session: $UGU_SESSION"
+    while tm has-session -t "$UGU_SESSION" 2>/dev/null; do sleep 1; done
 else
-  messenger_std "Nothing to upgrade."
+    typeset answer
+    while tm has-session -t "$UGU_SESSION" 2>/dev/null; do
+        tm attach-session -t "$UGU_SESSION" || break
+        tm has-session -t "$UGU_SESSION" 2>/dev/null || break
+        messenger_std "Detached while UGU is still running."
+        messenger_std_inline "[r] reattach   [l] leave it running in the background   [k] kill it: "
+        read -r -s -k 1 answer
+        linefeed
+        case "$answer" in
+            l|L)
+                messenger_std "Reattach later with: tmux -L $UGU_SOCKET attach -t $UGU_SESSION"
+                exit 0
+                ;;
+            k|K) ugu_abort ;;
+        esac
+    done
 fi
 
-end_sudo_run
-messenger_end "Script done."
+# ---------------------------------------------------------------------------
+# Report. The orchestrator reads the recorded results, not terminal output.
+# ---------------------------------------------------------------------------
+
+typeset -i failures=0
+typeset state pct stage msg wstart wupd rc_value icon cc
+typeset -a report_lines failed_workers
+
+for worker in "${workers[@]}"; do
+    state="missing"; pct=0; stage="No result"; msg="The worker never reported"; wstart=0; wupd=0
+    [[ -r "$UGU_STATE_DIR/$worker.state" ]] && IFS='|' read -r state pct stage msg wstart wupd < "$UGU_STATE_DIR/$worker.state"
+    rc_value=""
+    [[ -r "$UGU_STATE_DIR/results/$worker.rc" ]] && rc_value="$(<"$UGU_STATE_DIR/results/$worker.rc")"
+
+    if [[ "$state" == done && "$rc_value" == 0 ]]; then
+        icon="✓"; cc="$COLOR_SUCCESS"
+    else
+        icon="✗"; cc="$COLOR_ERROR"
+        (( failures += 1 ))
+        failed_workers+=( "$worker" )
+        [[ "$state" == done ]] && state="failed"
+    fi
+    ugu_fmt_time $(( wupd - wstart ))
+    report_lines+=( "$(printf '%s%s%s%s  %-12s %-16s %s  %s' \
+        "$BOLD" "$cc" "$icon" "$RESET" "$worker" "$stage" "$REPLY" "$msg")" )
+done
+
+ugu_fmt_time $(( EPOCHSECONDS - $(<"$UGU_STATE_DIR/start") ))
+typeset total_time="$REPLY"
+typeset title="UGU complete in $total_time"
+(( failures > 0 )) && title="UGU finished with $failures failure(s) in $total_time"
+
+linefeed
+typeset border=42
+(( failures > 0 )) && border=196
+gum style --border rounded --border-foreground "$border" --padding '1 2' \
+    "$(gum style --bold --foreground "$border" "$title")" "" "${report_lines[@]}"
+
+# Failure details come from the per-window logs.
+for worker in "${failed_workers[@]}"; do
+    linefeed
+    messenger_end "$worker: last output"
+    if [[ -r "$UGU_STATE_DIR/logs/$worker.log" ]]; then
+        tr '\r' '\n' < "$UGU_STATE_DIR/logs/$worker.log" \
+            | sed -E 's/\x1b\[[0-9;?]*[ -\/]*[@-~]//g' \
+            | grep -v '^[[:space:]]*$' | tail -n 12 | sed 's/^/    /'
+    fi
+done
+
+if (( failures > 0 )); then
+    linefeed
+    messenger_std "Logs kept in: $UGU_STATE_DIR/logs"
+    exit 1
+fi
+rm -rf -- "$UGU_STATE_DIR"
+exit 0
