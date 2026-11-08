@@ -14,14 +14,16 @@ Please share support:
 - [PayPal](https://www.paypal.com/paypalme/m1st0)
 - [Venmo](https://venmo.com/code?user_id=3319592654995456106&created=1753283702)
 
-## Why this?
+## Features
 
 A demonstration of system updates, package management, and scripting in ZSH, valuable for Ubuntu users and developers alike.
 
 Many Ubuntu users face challenges with automatic updates, especially when using Firefox Snap or Deb installations. 
 This script offers a reliable solution for those who prefer manual installations or need to bypass restrictions imposed by certain distributions.
 
-## Features
+![Dashboard](imgs/dashboard.webp)
+
+### Components
 
 - Updates run in parallel, each in its own tmux window (its own pty), so one slow or failing update never blocks the others
 - Live dashboard in window 0: animated progress bars, per-worker timers, the last line of each worker's terminal, and an activity feed
