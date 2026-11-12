@@ -50,6 +50,7 @@ if (( EUID == 0 )); then
     messenger_end "Run UGU as a normal user, not as root or through sudo."
     exit 1
 fi
+
 ugu_require_commands tmux gum apt-fast || {
     messenger_end "Install the missing command(s) above. gum: https://github.com/charmbracelet/gum#installation"
     exit 1
@@ -277,7 +278,8 @@ for worker in "${failed_workers[@]}"; do
     if [[ -r "$UGU_STATE_DIR/logs/$worker.log" ]]; then
         tr '\r' '\n' < "$UGU_STATE_DIR/logs/$worker.log" \
             | sed -E 's/\x1b\[[0-9;?]*[ -\/]*[@-~]//g' \
-            | grep -v '^[[:space:]]*$' | tail -n 12 | sed 's/^/    /'
+            | sed -E 's/^[[:space:]]*((█|░)+)[[:space:]]+[0-9]+%[[:space:]]+//' \
+            | grep -v '^[[:space:]]*$' | uniq | tail -n 12 | sed 's/^/    /'
     fi
 done
 

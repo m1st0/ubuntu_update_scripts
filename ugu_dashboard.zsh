@@ -30,7 +30,8 @@ integer n_workers=${#workers}
 esc=$'\e'
 integer rows=40 cols=100 frame=0 need_clear=1 all_done=0 finish_epoch=0 start_epoch=$EPOCHSECONDS
 typeset -A want_map last_icon tail_line waiting_hint
-typeset focus_worker=""
+typeset focus_worker="" wait_target=""
+integer wait_index=0 wait_kind=0
 
 [[ -r "$state_dir/start" ]] && start_epoch="$(<"$state_dir/start")"
 
@@ -45,8 +46,8 @@ read_size() {
 TRAPWINCH() { read_size }
 read_size
 
-enter_ui() { print -rn -- "${esc}[?1049h${esc}[?25l${esc}[2J" }
-leave_ui() { print -rn -- "${esc}[?25h${esc}[?1049l" }
+enter_ui() { stty -echo 2>/dev/null; print -rn -- "${esc}[?1049h${esc}[?25l${esc}[2J" }
+leave_ui() { stty echo 2>/dev/null; print -rn -- "${esc}[?25h${esc}[?1049l" }
 trap leave_ui EXIT
 enter_ui
 
@@ -170,7 +171,33 @@ render() {
     line+="  ${esc}[38;5;245m|${esc}[0m  ${esc}[38;5;39m${active} running${esc}[0m"
     (( waiting > 0 )) && line+="  ${esc}[38;5;245m|${esc}[0m  ${esc}[1;38;5;214m${waiting} need input${esc}[0m"
     (( failed > 0 )) && line+="  ${esc}[38;5;245m|${esc}[0m  ${esc}[1;38;5;196m${failed} failed${esc}[0m"
-    L+=( "$line" "" )
+    L+=( "$line" )
+
+    # Who needs you right now, from the previous frame. A worker that said it
+    # needs input (2) outranks one whose screen only looks like a prompt (1).
+    local -i wk=0 wkind=0
+    local ww=""
+    wait_target=""
+    wait_index=0
+    wait_kind=0
+    for (( wk = 2; wk >= 1 && wait_index == 0; wk-- )); do
+        for (( i = 1; i <= n_workers; i++ )); do
+            ww="${workers[i]}"
+            wkind="${want_map[$ww]:-0}"
+            if (( wkind == wk )); then
+                wait_target="$ww"
+                wait_index=$i
+                wait_kind=$wk
+                break
+            fi
+        done
+    done
+    if (( wait_index > 0 && wait_kind == 2 )); then
+        L+=( "  ${BOLD}${COLOR_WARNING}${(C)wait_target} needs input.${COLOR_RESET}  ${esc}[38;5;250mPress Enter to open it, or Ctrl-b ${wait_index}. Typing here does nothing.${esc}[0m" )
+    elif (( wait_index > 0 )); then
+        L+=( "  ${BOLD}${COLOR_WARNING}${(C)wait_target} may be waiting for input.${COLOR_RESET}  ${esc}[38;5;250mOpen it with ${wait_index} or Ctrl-b ${wait_index}.${esc}[0m" )
+    fi
+    L+=( "" )
 
     # ---- workers ----------------------------------------------------------
     for (( i = 1; i <= n_workers; i++ )); do
@@ -289,29 +316,36 @@ render() {
         # prompt) or when its screen shows a password or y/n prompt (any later
         # prompt). Either way, bring that window forward once.
         want=0
-        [[ "${st_state[i]}" == input ]] && want=1
         [[ "${st_state[i]}" == running ]] && (( ${waiting_hint[$w]:-0} )) && want=1
+        [[ "${st_state[i]}" == input ]] && want=2
         want_map[$w]=$want
     done
 
-    # One window is brought forward at a time. When its prompt is answered,
-    # go to the next worker that is waiting, or back to the dashboard (but only
-    # if you are still on the window we sent you to).
-    local prev="" cur="" back=0
-    if [[ -n "$focus_worker" && "${want_map[$focus_worker]:-0}" != 1 ]]; then
-        prev="$focus_worker"
-        focus_worker=""
-        cur="$(tmux display-message -p -t "$session" '#{window_name}' 2>/dev/null)"
-        [[ "$cur" == "$prev" ]] && back=1
+    # One window is brought forward at a time. A worker that said it needs
+    # input (want 2) outranks one whose screen merely looks like a prompt
+    # (want 1), so a false alarm can never hold back a sudo password prompt.
+    # When the prompt is answered, go to the next waiting worker, or back to
+    # the dashboard (only if you are still on the window we sent you to).
+    local best="" prev="" cur=""
+    local -i best_kind=0 cur_kind=0 kind=0 back=0
+    for w in "${workers[@]}"; do
+        kind="${want_map[$w]:-0}"
+        (( kind > best_kind )) && { best_kind=$kind; best="$w" }
+    done
+    [[ -n "$focus_worker" ]] && cur_kind="${want_map[$focus_worker]:-0}"
+    if [[ -n "$focus_worker" ]]; then
+        if (( cur_kind == 0 )); then
+            prev="$focus_worker"
+            focus_worker=""
+            cur="$(tmux display-message -p -t "$session" '#{window_name}' 2>/dev/null)"
+            [[ "$cur" == "$prev" ]] && back=1
+        elif (( best_kind > cur_kind )); then
+            focus_worker=""
+        fi
     fi
     if [[ -z "$focus_worker" ]]; then
-        for w in "${workers[@]}"; do
-            if [[ "${want_map[$w]:-0}" == 1 ]]; then
-                focus_worker="$w"
-                break
-            fi
-        done
-        if [[ -n "$focus_worker" ]]; then
+        if [[ -n "$best" ]]; then
+            focus_worker="$best"
             tmux select-window -t "$session:$focus_worker" 2>/dev/null
         elif (( back )); then
             tmux select-window -t "$session:dashboard" 2>/dev/null
@@ -335,6 +369,14 @@ while true; do
         read -r -s -k 1 -t 0.08 key 2>/dev/null || key=""
     else
         sleep 0.08
+    fi
+    if (( wait_index > 0 && wait_kind == 2 )); then
+        # A worker has said it needs input (for example the sudo password).
+        # Keys typed here never reach it, so they are dropped silently (echo
+        # is off). Enter opens its window. A worker that only looks like it is
+        # waiting does not switch this on, so the normal keys keep working.
+        [[ "$key" == $'\n' || "$key" == $'\r' ]] && tmux select-window -t "$session:$wait_target" 2>/dev/null
+        key=""
     fi
     case "$key" in
         [1-9])
