@@ -90,8 +90,21 @@ ugu_menu() {
         Tools*)      chosen=( tools ) ;;
         Apps*)       chosen=( firefox thunderbird zen ) ;;
         Pick*)
-            picked="$(gum choose --no-limit --header 'Space toggles, Enter confirms' "${all_workers[@]}")" || return 1
-            chosen=( ${(f)picked} )
+            # Space ticks a worker and Enter confirms. Enter with nothing ticked
+            # returns an empty list, which is asked again, not treated as a
+            # cancel. Esc or Ctrl-C cancels.
+            local -i rc=0 tries=0
+            while (( tries < 5 )); do
+                picked="$(gum choose --no-limit \
+                    --header 'Space ticks a worker, Enter confirms, Esc cancels' \
+                    "${all_workers[@]}")"
+                rc=$?
+                (( rc == 0 )) || return 1
+                chosen=( ${(f)picked} )
+                (( ${#chosen} )) && break
+                messenger_std "Nothing was ticked. Press Space on each worker you want, then Enter."
+                (( tries += 1 ))
+            done
             ;;
         *)           return 1 ;;
     esac
