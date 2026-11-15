@@ -6,14 +6,16 @@
 # Please share support: https://www.paypal.com/paypalme/m1st0
 #                       https://venmo.com/code?user_id=3319592654995456106&created=1753283702
 #
-# Live dashboard (tmux window 0). Usage: ugu_dashboard.zsh STATE_DIR SESSION WORKER...
+# Live dashboard (tmux window 0, or the first herdr tab). Usage:
+#   ugu_dashboard.zsh STATE_DIR SESSION WORKER...
+# SESSION is the tmux session name; it is unused under herdr (UGU_MUX=herdr).
 #
 # Rendering is native ANSI: each frame is built in memory and written once,
 # starting from the cursor home position with no screen clear. That is what
 # removes the flicker; the old version cleared the screen and ran `gum style`
 # about twenty times per frame. Gum is still used for the final summary.
 #
-# Keys: 1-9 jump to a worker window. When everything has finished, q or Enter
+# Keys: 1-9 jump to a worker window or tab. When everything has finished, q or Enter
 # closes UGU.
 
 
@@ -27,7 +29,57 @@ typeset -a workers
 workers=( "$@" )
 integer n_workers=${#workers}
 
+# Multiplexer glue. tmux and herdr differ only in how the dashboard reads a
+# worker's screen, brings a worker forward, marks its state, and finishes.
+if [[ "${UGU_MUX:-tmux}" == herdr ]]; then
+    source "${0:A:h}/ugu_herdr.zsh" || exit 1
+    ugu_herdr_load_ids "$state_dir" "${workers[@]}"
+fi
+
+# Text on a worker's screen, for the prompt hint and the last-line preview.
+mux_capture() {
+    if [[ "${UGU_MUX:-tmux}" == herdr ]]; then
+        ugu_hd pane read "${UGU_HERDR_PANE[$1]:-none}" --source recent-unwrapped --lines 40 2>/dev/null
+    else
+        tmux capture-pane -p -J -t "$session:$1" 2>/dev/null
+    fi
+}
+
+# Bring a worker (or "dashboard") forward.
+mux_goto() {
+    if [[ "${UGU_MUX:-tmux}" == herdr ]]; then
+        ugu_herdr_goto "$1"
+    else
+        tmux select-window -t "$session:$1" 2>/dev/null
+    fi
+}
+
+# Which worker (or "dashboard") you are looking at, in REPLY.
+mux_current() {
+    if [[ "${UGU_MUX:-tmux}" == herdr ]]; then
+        ugu_herdr_current
+    else
+        REPLY="$(tmux display-message -p -t "$session" '#{window_name}' 2>/dev/null)"
+    fi
+}
+
+# Everything finished and you asked to close. Under tmux that ends the session,
+# which returns control to ugu.zsh. Under herdr, ugu.zsh is waiting for this file.
+mux_finish() {
+    if [[ "${UGU_MUX:-tmux}" == herdr ]]; then
+        : > "$state_dir/finished"
+    else
+        tmux kill-session -t "$session" 2>/dev/null
+    fi
+    exit 0
+}
+
 esc=$'\e'
+if [[ "${UGU_MUX:-tmux}" == herdr ]]; then
+    UGU_HINT_BACK=" The first tab returns here."
+else
+    UGU_HINT_BACK=" Ctrl-b 0 returns here."
+fi
 integer rows=40 cols=100 frame=0 need_clear=1 all_done=0 finish_epoch=0 start_epoch=$EPOCHSECONDS
 typeset -A want_map last_icon tail_line waiting_hint
 typeset focus_worker="" wait_target=""
@@ -69,7 +121,7 @@ refresh_tails() {
     local -a lines
     local -i i
     for w in "${workers[@]}"; do
-        text="$(tmux capture-pane -p -J -t "$session:$w" 2>/dev/null)" || text=""
+        text="$(mux_capture "$w")" || text=""
         lines=( "${(@f)text}" )
         tail_line[$w]=""
         waiting_hint[$w]=0
@@ -91,6 +143,7 @@ set_window_icon() {
     local w="$1" icon="$2" color="$3"
     [[ "${last_icon[$w]:-}" == "$icon$color" ]] && return 0
     last_icon[$w]="$icon$color"
+    [[ "${UGU_MUX:-tmux}" == herdr ]] && return 0
     tmux set-option -w -t "$session:$w" @ugu_icon "$icon " 2>/dev/null
     tmux set-option -w -t "$session:$w" @ugu_color "colour$color" 2>/dev/null
 }
@@ -192,10 +245,12 @@ render() {
             fi
         done
     done
+    local hint_keys=""
+    [[ "${UGU_MUX:-tmux}" == herdr ]] || hint_keys=", or Ctrl-b ${wait_index}"
     if (( wait_index > 0 && wait_kind == 2 )); then
-        L+=( "  ${BOLD}${COLOR_WARNING}${(C)wait_target} needs input.${COLOR_RESET}  ${esc}[38;5;250mPress Enter to open it, or Ctrl-b ${wait_index}. Typing here does nothing.${esc}[0m" )
+        L+=( "  ${BOLD}${COLOR_WARNING}${(C)wait_target} needs input.${COLOR_RESET}  ${esc}[38;5;250mPress Enter to open it${hint_keys}. Typing here does nothing.${esc}[0m" )
     elif (( wait_index > 0 )); then
-        L+=( "  ${BOLD}${COLOR_WARNING}${(C)wait_target} may be waiting for input.${COLOR_RESET}  ${esc}[38;5;250mOpen it with ${wait_index} or Ctrl-b ${wait_index}.${esc}[0m" )
+        L+=( "  ${BOLD}${COLOR_WARNING}${(C)wait_target} may be waiting for input.${COLOR_RESET}  ${esc}[38;5;250mOpen it with ${wait_index}${hint_keys}.${esc}[0m" )
     fi
     L+=( "" )
 
@@ -281,7 +336,7 @@ render() {
         fi
         L+=( "  ${esc}[38;5;245mPress ${esc}[1mq${esc}[0m${esc}[38;5;245m or ${esc}[1mEnter${esc}[0m${esc}[38;5;245m to close UGU and see the summary. Keys 1-${n_workers} open a worker.${esc}[0m" )
     else
-        L+=( "  ${esc}[38;5;245mKeys 1-${n_workers} (or Ctrl-b then a number) open a worker terminal. Ctrl-b 0 returns here.${esc}[0m" )
+        L+=( "  ${esc}[38;5;245mKeys 1-${n_workers} open a worker terminal.${UGU_HINT_BACK}${esc}[0m" )
     fi
 
     # ---- paint: one write, home position, no screen clear -----------------
@@ -315,6 +370,9 @@ render() {
         # A worker needs you when it says so (state "input", the first sudo
         # prompt) or when its screen shows a password or y/n prompt (any later
         # prompt). Either way, bring that window forward once.
+        if [[ "${UGU_MUX:-tmux}" == herdr ]]; then
+            ugu_herdr_report "$w" "${st_state[i]}" "${st_pct[i]}" "${st_stage[i]}" "${st_msg[i]}" "${waiting_hint[$w]:-0}"
+        fi
         want=0
         [[ "${st_state[i]}" == running ]] && (( ${waiting_hint[$w]:-0} )) && want=1
         [[ "${st_state[i]}" == input ]] && want=2
@@ -337,7 +395,8 @@ render() {
         if (( cur_kind == 0 )); then
             prev="$focus_worker"
             focus_worker=""
-            cur="$(tmux display-message -p -t "$session" '#{window_name}' 2>/dev/null)"
+            mux_current
+            cur="$REPLY"
             [[ "$cur" == "$prev" ]] && back=1
         elif (( best_kind > cur_kind )); then
             focus_worker=""
@@ -346,9 +405,9 @@ render() {
     if [[ -z "$focus_worker" ]]; then
         if [[ -n "$best" ]]; then
             focus_worker="$best"
-            tmux select-window -t "$session:$focus_worker" 2>/dev/null
+            mux_goto "$focus_worker"
         elif (( back )); then
-            tmux select-window -t "$session:dashboard" 2>/dev/null
+            mux_goto dashboard
         fi
     fi
 }
@@ -360,8 +419,7 @@ while true; do
     (( frame += 1 ))
 
     if (( all_done )) && [[ "${UGU_HEADLESS:-0}" == 1 ]]; then
-        tmux kill-session -t "$session" 2>/dev/null
-        exit 0
+        mux_finish
     fi
 
     key=""
@@ -375,18 +433,15 @@ while true; do
         # Keys typed here never reach it, so they are dropped silently (echo
         # is off). Enter opens its window. A worker that only looks like it is
         # waiting does not switch this on, so the normal keys keep working.
-        [[ "$key" == $'\n' || "$key" == $'\r' ]] && tmux select-window -t "$session:$wait_target" 2>/dev/null
+        [[ "$key" == $'\n' || "$key" == $'\r' ]] && mux_goto "$wait_target"
         key=""
     fi
     case "$key" in
         [1-9])
-            (( key <= n_workers )) && tmux select-window -t "$session:${workers[key]}" 2>/dev/null
+            (( key <= n_workers )) && mux_goto "${workers[key]}"
             ;;
         q|Q|$'\n'|$'\r')
-            if (( all_done )); then
-                tmux kill-session -t "$session" 2>/dev/null
-                exit 0
-            fi
+            (( all_done )) && mux_finish
             ;;
     esac
 done

@@ -6,8 +6,9 @@
 # Please share support: https://www.paypal.com/paypalme/m1st0
 #                       https://venmo.com/code?user_id=3319592654995456106&created=1753283702
 #
-# UGU orchestrator: runs the update workers in parallel, each in its own tmux
-# window (its own pty), with a live dashboard in window 0, then reports.
+# UGU orchestrator: runs the update workers in parallel, each in its own
+# terminal (its own pty), with a live dashboard, then reports. The terminals are
+# tmux windows, or herdr tabs when UGU is run from inside herdr.
 #
 #   ./ugu.zsh                     menu in a terminal, everything when there is none
 #   ./ugu.zsh -a                  everything, no menu
@@ -17,6 +18,10 @@
 #
 # Requires gum (https://github.com/charmbracelet/gum#installation).
 #
+# Multiplexer: UGU_MUX=auto (default) uses herdr when run from a herdr pane and
+# tmux otherwise. UGU_MUX=tmux or UGU_MUX=herdr forces one. UGU_KEEP=1 keeps the
+# herdr workspace open after a successful run.
+#
 # Every worker also runs on its own, for example ./ugu_system.zsh.
 
 
@@ -25,6 +30,7 @@ umask 077
 
 SCRIPT_DIR="${0:A:h}"
 source "$SCRIPT_DIR/ugu_common.zsh" || exit 1
+source "$SCRIPT_DIR/ugu_herdr.zsh" || exit 1
 
 typeset -a o_yes o_help o_only o_menu o_all
 zparseopts -D -E -- y=o_yes -yes=o_yes h=o_help -help=o_help o:=o_only -only:=o_only \
@@ -38,6 +44,7 @@ if (( ${#o_help} )); then
     print -r -- "  -y, --yes   answer apt prompts automatically (UGU_ASSUME_YES=1)"
     print -r -- "  -o, --only  run only the named workers, e.g. --only system,tools"
     print -r -- "Workers: firefox thunderbird zen system tools flatpak firmware"
+    print -r -- "Environment: UGU_MUX=auto|tmux|herdr (auto uses herdr inside a herdr pane), UGU_KEEP=1"
     exit 0
 fi
 (( ${#o_yes} )) && export UGU_ASSUME_YES=1
@@ -51,7 +58,34 @@ if (( EUID == 0 )); then
     exit 1
 fi
 
-ugu_require_commands tmux gum apt-fast || {
+# Pick the multiplexer. Unattended runs (no terminal) always use tmux, because
+# herdr mode needs someone looking at a herdr pane.
+typeset UGU_MUX="${UGU_MUX:-auto}"
+case "$UGU_MUX" in
+    auto)
+        if [[ -t 0 && -t 1 ]] && ugu_herdr_available; then UGU_MUX=herdr; else UGU_MUX=tmux; fi
+        ;;
+    tmux) ;;
+    herdr)
+        if ! ugu_herdr_available; then
+            messenger_end "UGU_MUX=herdr needs a herdr pane (HERDR_ENV=1) and the herdr command."
+            exit 1
+        fi
+        ;;
+    *)
+        messenger_end "UGU_MUX must be auto, tmux or herdr (got: $UGU_MUX)."
+        exit 2
+        ;;
+esac
+export UGU_MUX
+
+typeset -a need_commands=( gum apt-fast )
+if [[ "$UGU_MUX" == herdr ]]; then
+    need_commands+=( jq script )
+else
+    need_commands+=( tmux )
+fi
+ugu_require_commands "${need_commands[@]}" || {
     messenger_end "Install the missing command(s) above. gum: https://github.com/charmbracelet/gum#installation"
     exit 1
 }
@@ -167,7 +201,11 @@ fi
 tm() { env -u TMUX tmux -u -L "$UGU_SOCKET" -f /dev/null "$@" }
 
 ugu_abort() {
-    tm kill-session -t "$UGU_SESSION" 2>/dev/null
+    if [[ "$UGU_MUX" == herdr ]]; then
+        ugu_herdr_close
+    else
+        tm kill-session -t "$UGU_SESSION" 2>/dev/null
+    fi
 }
 trap 'ugu_abort; exit 130' INT TERM HUP
 
@@ -186,69 +224,194 @@ lines="$(tput lines 2>/dev/null)" || lines=40
 (( cols >= 40 )) || cols=120
 (( lines >= 12 )) || lines=40
 
-# Window 0: dashboard.
-ugu_shell_command zsh "$SCRIPT_DIR/ugu_dashboard.zsh" "$UGU_STATE_DIR" "$UGU_SESSION" "${workers[@]}"
-if ! tm new-session -d -s "$UGU_SESSION" -n dashboard -x "$cols" -y "$lines" "$REPLY"; then
-    messenger_end "Could not create the tmux session."
-    exit 1
-fi
-
-tm set-option -g status-position top
-tm set-option -g status-interval 1
-tm set-option -g mouse on
-tm set-option -g remain-on-exit on
-tm set-option -g automatic-rename off
-tm set-option -g status-style 'bg=colour234,fg=colour250'
-tm set-option -g status-left-length 20
-tm set-option -g status-left '#[bg=colour212,fg=colour16,bold] UGU #[default] '
-tm set-option -g status-right '#[fg=colour244]Ctrl-b 0 dashboard  n/p switch  d detach  mouse: click a tab '
-tm set-option -gw @ugu_icon ''
-tm set-option -gw @ugu_color colour245
-tm set-option -g window-status-separator ''
-tm set-option -g window-status-format ' #[fg=#{@ugu_color}]#{@ugu_icon}#[fg=colour245]#I:#W '
-tm set-option -g window-status-current-format '#[bg=colour212,fg=colour16,bold] #{@ugu_icon}#I:#W #[default]'
-
-for worker in "${workers[@]}"; do
-    script="$SCRIPT_DIR/ugu_${worker}.zsh"
-    ugu_shell_command zsh "$SCRIPT_DIR/ugu_worker_runner.zsh" "$worker" "$script" "$UGU_STATE_DIR"
-    if ! tm new-window -d -t "$UGU_SESSION:" -n "$worker" "$REPLY"; then
-        messenger_end "Could not create a tmux window for $worker."
-        ugu_abort
+# ---------------------------------------------------------------------------
+# tmux: window 0 is the dashboard, one window per worker.
+# ---------------------------------------------------------------------------
+ugu_run_tmux() {
+    # Window 0: dashboard.
+    ugu_shell_command zsh "$SCRIPT_DIR/ugu_dashboard.zsh" "$UGU_STATE_DIR" "$UGU_SESSION" "${workers[@]}"
+    if ! tm new-session -d -s "$UGU_SESSION" -n dashboard -x "$cols" -y "$lines" "$REPLY"; then
+        messenger_end "Could not create the tmux session."
         exit 1
     fi
-    # Keep a full copy of each worker's terminal output for the final report.
-    tm pipe-pane -o -t "$UGU_SESSION:$worker" "cat >> ${(q)UGU_STATE_DIR}/logs/${worker}.log"
-done
-tm select-window -t "$UGU_SESSION:dashboard"
 
-# Release the runners now that every window exists and is being logged.
-: > "$UGU_STATE_DIR/go"
+    tm set-option -g status-position top
+    tm set-option -g status-interval 1
+    tm set-option -g mouse on
+    tm set-option -g remain-on-exit on
+    tm set-option -g automatic-rename off
+    tm set-option -g status-style 'bg=colour234,fg=colour250'
+    tm set-option -g status-left-length 20
+    tm set-option -g status-left '#[bg=colour212,fg=colour16,bold] UGU #[default] '
+    tm set-option -g status-right '#[fg=colour244]Ctrl-b 0 dashboard  n/p switch  d detach  mouse: click a tab '
+    tm set-option -gw @ugu_icon ''
+    tm set-option -gw @ugu_color colour245
+    tm set-option -g window-status-separator ''
+    tm set-option -g window-status-format ' #[fg=#{@ugu_color}]#{@ugu_icon}#[fg=colour245]#I:#W '
+    tm set-option -g window-status-current-format '#[bg=colour212,fg=colour16,bold] #{@ugu_icon}#I:#W #[default]'
 
-if [[ "${UGU_HEADLESS:-0}" == 1 ]]; then
-    messenger_std "No terminal attached; running headless. Session: $UGU_SESSION"
-    while tm has-session -t "$UGU_SESSION" 2>/dev/null; do sleep 1; done
-else
-    typeset answer
-    while tm has-session -t "$UGU_SESSION" 2>/dev/null; do
-        tm attach-session -t "$UGU_SESSION" || break
-        tm has-session -t "$UGU_SESSION" 2>/dev/null || break
-        messenger_std "Detached while UGU is still running."
-        messenger_std_inline "[r] reattach   [l] leave it running in the background   [k] kill it: "
-        read -r -s -k 1 answer
-        linefeed
-        case "$answer" in
-            l|L)
-                messenger_std "Reattach later with: tmux -L $UGU_SOCKET attach -t $UGU_SESSION"
-                exit 0
-                ;;
-            k|K) ugu_abort ;;
-        esac
+    local worker script
+    for worker in "${workers[@]}"; do
+        script="$SCRIPT_DIR/ugu_${worker}.zsh"
+        ugu_shell_command zsh "$SCRIPT_DIR/ugu_worker_runner.zsh" "$worker" "$script" "$UGU_STATE_DIR"
+        if ! tm new-window -d -t "$UGU_SESSION:" -n "$worker" "$REPLY"; then
+            messenger_end "Could not create a tmux window for $worker."
+            ugu_abort
+            exit 1
+        fi
+        # Keep a full copy of each worker's terminal output for the final report.
+        tm pipe-pane -o -t "$UGU_SESSION:$worker" "cat >> ${(q)UGU_STATE_DIR}/logs/${worker}.log"
     done
+    tm select-window -t "$UGU_SESSION:dashboard"
+
+    # Release the runners now that every window exists and is being logged.
+    : > "$UGU_STATE_DIR/go"
+
+    if [[ "${UGU_HEADLESS:-0}" == 1 ]]; then
+        messenger_std "No terminal attached; running headless. Session: $UGU_SESSION"
+        while tm has-session -t "$UGU_SESSION" 2>/dev/null; do sleep 1; done
+    else
+        local answer
+        while tm has-session -t "$UGU_SESSION" 2>/dev/null; do
+            tm attach-session -t "$UGU_SESSION" || break
+            tm has-session -t "$UGU_SESSION" 2>/dev/null || break
+            messenger_std "Detached while UGU is still running."
+            messenger_std_inline "[r] reattach   [l] leave it running in the background   [k] kill it: "
+            read -r -s -k 1 answer
+            linefeed
+            case "$answer" in
+                l|L)
+                    messenger_std "Reattach later with: tmux -L $UGU_SOCKET attach -t $UGU_SESSION"
+                    exit 0
+                    ;;
+                k|K) ugu_abort ;;
+            esac
+        done
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# herdr: one workspace, a dashboard tab first, then one tab per worker. herdr
+# does the multiplexing, so there is no second multiplexer. The workers' state
+# files drive the sidebar (see ugu_herdr.zsh). This pane only waits, then reports.
+# ---------------------------------------------------------------------------
+typeset -g UGU_HERDR_ORIGIN_WS="${HERDR_WORKSPACE_ID:-}" UGU_HERDR_ORIGIN_TAB="${HERDR_TAB_ID:-}"
+
+# Close the workspace UGU created (never anything else) and go back to where
+# UGU was started.
+ugu_herdr_close() {
+    [[ -n "$UGU_HERDR_WS" ]] && ugu_hd workspace close "$UGU_HERDR_WS" >/dev/null 2>&1
+    UGU_HERDR_WS=""
+    ugu_herdr_return
+}
+
+ugu_herdr_return() {
+    [[ -n "$UGU_HERDR_ORIGIN_WS" ]] && ugu_hd workspace focus "$UGU_HERDR_ORIGIN_WS" >/dev/null 2>&1
+    [[ -n "$UGU_HERDR_ORIGIN_TAB" ]] && ugu_hd tab focus "$UGU_HERDR_ORIGIN_TAB" >/dev/null 2>&1
+    return 0
+}
+
+# Create a tab for NAME and record its tab and pane ids.
+ugu_herdr_new_tab() {
+    local name="$1" json
+    json="$(ugu_hd tab create --workspace "$UGU_HERDR_WS" --label "$name" --cwd "$PWD" --no-focus)" || return 1
+    REPLY_TAB="$(ugu_herdr_json "$json" '.result.tab.tab_id')"
+    REPLY_PANE="$(ugu_herdr_json "$json" '.result.root_pane.pane_id')"
+    [[ -n "$REPLY_TAB" && -n "$REPLY_PANE" ]] || return 1
+    print -r -- "$REPLY_TAB"  > "$UGU_STATE_DIR/herdr/$name.tab"
+    print -r -- "$REPLY_PANE" > "$UGU_STATE_DIR/herdr/$name.pane"
+}
+
+ugu_run_herdr() {
+    local json worker script launcher log REPLY_TAB REPLY_PANE
+    mkdir -m 700 "$UGU_STATE_DIR/herdr" "$UGU_STATE_DIR/launch" || exit 1
+
+    json="$(ugu_hd workspace create --cwd "$PWD" --label ugu --focus)" || {
+        messenger_end "Could not create a herdr workspace."
+        exit 1
+    }
+    UGU_HERDR_WS="$(ugu_herdr_json "$json" '.result.workspace.workspace_id')"
+    REPLY_TAB="$(ugu_herdr_json "$json" '.result.tab.tab_id')"
+    REPLY_PANE="$(ugu_herdr_json "$json" '.result.root_pane.pane_id')"
+    if [[ -z "$UGU_HERDR_WS" || -z "$REPLY_TAB" || -z "$REPLY_PANE" ]]; then
+        messenger_end "herdr did not return the workspace ids I expected."
+        ugu_herdr_close
+        exit 1
+    fi
+    print -r -- "$UGU_HERDR_WS" > "$UGU_STATE_DIR/herdr/workspace"
+    print -r -- "$REPLY_TAB"  > "$UGU_STATE_DIR/herdr/dashboard.tab"
+    print -r -- "$REPLY_PANE" > "$UGU_STATE_DIR/herdr/dashboard.pane"
+    ugu_hd tab rename "$REPLY_TAB" dashboard >/dev/null 2>&1
+
+    # The dashboard pane is the workspace's first pane. Every worker gets its
+    # own tab (its own pty, so sudo works per worker).
+    local dash_pane="$REPLY_PANE"
+    for worker in "${workers[@]}"; do
+        if ! ugu_herdr_new_tab "$worker"; then
+            messenger_end "Could not create a herdr tab for $worker."
+            ugu_herdr_close
+            exit 1
+        fi
+    done
+
+    # Dashboard first, so it is drawing while the workers start.
+    ugu_herdr_launcher dashboard "" zsh "$SCRIPT_DIR/ugu_dashboard.zsh" "$UGU_STATE_DIR" herdr "${workers[@]}"
+    ugu_hd pane run "$dash_pane" "zsh ${(q)REPLY}" >/dev/null || {
+        messenger_end "Could not start the dashboard in herdr."
+        ugu_herdr_close
+        exit 1
+    }
+
+    for worker in "${workers[@]}"; do
+        script="$SCRIPT_DIR/ugu_${worker}.zsh"
+        log="$UGU_STATE_DIR/logs/${worker}.log"
+        ugu_herdr_launcher "$worker" "$log" \
+            zsh "$SCRIPT_DIR/ugu_worker_runner.zsh" "$worker" "$script" "$UGU_STATE_DIR"
+        launcher="$REPLY"
+        read -r REPLY_PANE < "$UGU_STATE_DIR/herdr/$worker.pane"
+        if ! ugu_hd pane run "$REPLY_PANE" "zsh ${(q)launcher}" >/dev/null; then
+            messenger_end "Could not start $worker in herdr."
+            ugu_herdr_close
+            exit 1
+        fi
+    done
+
+    # Release the runners now that every tab exists.
+    : > "$UGU_STATE_DIR/go"
+    messenger_std "UGU is running in the herdr workspace 'ugu'. Press q in its dashboard when it finishes."
+    messenger_std "Ctrl-C here stops everything."
+
+    # Wait for the dashboard to say it is finished (you pressed q or Enter after
+    # everything completed). Also stop if you closed the workspace yourself, or if
+    # every worker has recorded a result and the dashboard has gone quiet.
+    local -i all_since=0 have=0
+    while [[ ! -e "$UGU_STATE_DIR/finished" ]]; do
+        ugu_hd workspace get "$UGU_HERDR_WS" >/dev/null 2>&1 || break
+        have=0
+        for worker in "${workers[@]}"; do
+            [[ -e "$UGU_STATE_DIR/results/$worker.rc" ]] && (( have += 1 ))
+        done
+        if (( have == ${#workers} )); then
+            (( all_since == 0 )) && all_since=$EPOCHSECONDS
+            (( EPOCHSECONDS - all_since > 600 )) && break
+        fi
+        sleep 1
+    done
+}
+
+if [[ "$UGU_MUX" == herdr ]]; then
+    ugu_run_herdr
+else
+    ugu_run_tmux
 fi
 
 # ---------------------------------------------------------------------------
 # Report. The orchestrator reads the recorded results, not terminal output.
 # ---------------------------------------------------------------------------
+
+# herdr: bring you back to the pane UGU was started from, so the summary is
+# where you are looking.
+[[ "$UGU_MUX" == herdr ]] && ugu_herdr_return
 
 typeset -i failures=0
 typeset state pct stage msg wstart wupd rc_value icon cc
@@ -296,10 +459,18 @@ for worker in "${failed_workers[@]}"; do
     fi
 done
 
+if [[ "$UGU_MUX" == herdr ]]; then
+    ugu_hd notification show "UGU finished" --body "$title" --sound done >/dev/null 2>&1
+fi
+
 if (( failures > 0 )); then
     linefeed
     messenger_std "Logs kept in: $UGU_STATE_DIR/logs"
+    [[ "$UGU_MUX" == herdr && -n "$UGU_HERDR_WS" ]] \
+        && messenger_std "The herdr workspace 'ugu' is still open so you can read each worker's tab."
     exit 1
 fi
+# Everything worked: close the UGU workspace unless you asked to keep it.
+[[ "$UGU_MUX" == herdr && "${UGU_KEEP:-0}" != 1 && -n "$UGU_HERDR_WS" ]] && ugu_herdr_close
 rm -rf -- "$UGU_STATE_DIR"
 exit 0

@@ -4,7 +4,7 @@ SPDX-License-Identifier: Apache-2.0
 -->
 # UGU – Ubuntu Grab Updates
 
-This project provides a ZSH tool that updates an Ubuntu system in parallel. Each update runs in its own tmux window with its own terminal, and a live dashboard shows progress for all of them.
+This project provides a ZSH tool that updates an Ubuntu system in parallel. Each update runs in its own terminal (a tmux window, or a [herdr](https://herdr.dev) tab when you run it from herdr), and a live dashboard shows progress for all of them.
 
 Copyright © 2017–2026 Maulik Mistry
 
@@ -25,7 +25,7 @@ This script offers a reliable solution for those who prefer manual installations
 
 ### Components
 
-- Updates run in parallel, each in its own tmux window (its own pty), so one slow or failing update never blocks the others
+- Updates run in parallel, each in its own tmux window or herdr tab (its own pty), so one slow or failing update never blocks the others
 - Live dashboard in window 0: animated progress bars, per-worker timers, the last line of each worker's terminal, and an activity feed
 - Menu to choose what to run (powered by gum), or flags to skip it
 - Every worker also runs on its own, for example `./ugu_system.zsh`
@@ -43,6 +43,7 @@ This script offers a reliable solution for those who prefer manual installations
 
 - Ubuntu with ZSH
 - `tmux`, [gum](https://github.com/charmbracelet/gum#installation), and `apt-fast` (UGU checks for these at startup)
+- Inside herdr instead of tmux: `herdr` (0.9.5 or newer), `jq`, and `script` (from util-linux, already on Ubuntu)
 - `sudo`, `snap`, and `python3` for system updates
 - `curl`, `jq`, `tar`, `awk`, and `grep` for application updates
 - `rustup`, `uv`, and `git` for development tool updates (a missing tool is skipped, not a failure)
@@ -97,6 +98,27 @@ UGU runs on its own private tmux server, so your own tmux sessions and configura
 - When a worker needs you (a sudo password or a yes/no question), the dashboard switches to its window and switches back when you have answered.
 - When all workers finish, press `q` or Enter in the dashboard to close it and print the summary. Finished windows stay open until then.
 - If you detach early you can reattach, leave it running in the background, or kill it.
+
+### Running in herdr
+
+Run `ugu.zsh` from any [herdr](https://herdr.dev) pane and UGU uses herdr instead of tmux, so there is no second multiplexer. `UGU_MUX=auto` (the default) picks herdr when `HERDR_ENV=1`, and tmux otherwise or when there is no terminal. Force one with `UGU_MUX=herdr` or `UGU_MUX=tmux`.
+
+- UGU creates a workspace named `ugu` in your current herdr session: a `dashboard` tab first, then one tab per worker. It only ever closes that workspace.
+- The sidebar shows each worker as an agent named `ugu-<worker>` with a state and a label such as `Downloading 42%`. A worker that needs a password shows as blocked and raises a toast. A failed worker shows as `unknown` with the label `failed`, because herdr has no failed state.
+- The dashboard tab is the same animated dashboard. Press `1` to `9` to open a worker's tab. The first tab returns to the dashboard.
+- Press `q` or Enter in the dashboard once everything finishes. UGU returns you to the pane you started it from and prints the summary there. After a clean run it closes the `ugu` workspace (set `UGU_KEEP=1` to keep it). After a failure it stays open so you can read each worker's tab.
+- Ctrl-C in the pane you started UGU from stops everything and closes the workspace.
+- Each worker's output is also written to `logs/<worker>.log` through `script`, so the failure report works the same as with tmux.
+
+To show the percentage and stage in the sidebar rows, add this to your herdr `config.toml`, then run `herdr server reload-config`:
+
+```toml
+[ui.sidebar.agents]
+rows = [
+  ["state_icon", "agent", "state_text"],
+  ["workspace", "tab"],
+]
+```
 
 ### Running a worker alone
 
